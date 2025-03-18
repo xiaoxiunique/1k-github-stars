@@ -34,6 +34,7 @@ interface Repository {
   stars: number;
   language: string;
   forks: number;
+  pushed_at: string;
 }
 
 const languageColors: Record<string, string> = {
