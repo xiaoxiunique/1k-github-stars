@@ -2,6 +2,18 @@
 
 import { db } from "./db";
 
+export async function getTotal() {
+  const result = await db.query({
+    query: "select count(1) as count from repos_new final",
+    format: "JSONEachRow",
+  });
+
+  const data = await result.json();
+
+  // @ts-ignore
+  return data?.[0]?.count ?? 0;
+}
+
 export async function getRepositories(offset = 0, limit = 50) {
   const result = await db.query({
     query: `select * from repos_new final order by stars desc limit ${limit} offset ${offset}`,

@@ -1,5 +1,5 @@
 import { ThemeToggle } from "@/components/theme-toggle";
-import { getRepositories } from "./_actions";
+import { getRepositories, getTotal } from "./_actions";
 import RepoList from "./components/RepoList";
 import { Metadata } from "next";
 
@@ -29,6 +29,7 @@ export const metadata: Metadata = {
 export default async function Home() {
   const reposData = await getRepositories(0, 50);
   const initialRepos = JSON.parse(JSON.stringify(reposData));
+  const total = await getTotal();
 
   return (
     <main className="min-h-screen bg-muted/40 p-4 md:p-8">
@@ -43,7 +44,7 @@ export default async function Home() {
           <ThemeToggle />
         </header>
 
-        <RepoList initialRepos={initialRepos} />
+        <RepoList initialRepos={initialRepos} total={total} />
       </div>
     </main>
   );
