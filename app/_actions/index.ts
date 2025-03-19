@@ -85,11 +85,8 @@ export async function aiSearchRepositories({
   }
 
   try {
-    // Get database table structure
-    const ddl = await getDDL();
-    
     // Use AI to generate query conditions
-    const result = await generateQueryConditions(ddl, query);
+    const result = await generateQueryConditions(``, query);
     const aiResponse = result.object as unknown as {
       success: boolean;
       sqlQuery: string;

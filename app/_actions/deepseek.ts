@@ -8,13 +8,6 @@ export async function generateQueryConditions(ddl: string, query: string) {
     schema: z.object({
       success: z.boolean().describe("Whether SQL query generation was successful. Returns false if user input is invalid"),
       sqlQuery: z.string().describe("The generated SQL query"),
-      conditions: z.array(
-        z.object({
-          field: z.string().describe("Database field name"),
-          operator: z.string().describe("Operator like =, >, <, LIKE etc"),
-          value: z.string().describe("Query value")
-        })
-      ).describe("Structured representation of query conditions"),
     }),
     prompt: `
       Convert the following natural language query to SQL query.
@@ -22,7 +15,30 @@ export async function generateQueryConditions(ddl: string, query: string) {
       Also provide structured representation of query conditions for program processing.
       
       Natural language query: ${query}
-      Database schema: ${ddl}
+      Database schema: CREATE TABLE default.repos_new
+      (
+        name String,
+        user_id Int64,
+        user_name String,
+        description String,
+        full_name String,
+        topics Array(String),
+        url String,
+        stars Int64,
+        language String,
+        update_at DateTime,
+        created_at DateTime,
+        forks Int64,
+        watchers Int64,
+        size Int64,
+        open_issues Int64,
+        license String,
+        pushed_at DateTime
+      )
+      ENGINE = SharedReplacingMergeTree('/clickhouse/tables/{uuid}/{shard}', '{replica}')
+      PRIMARY KEY name
+      ORDER BY name
+      SETTINGS index_granularity = 8192
       Database: clickhouse
 
       ## Notes
