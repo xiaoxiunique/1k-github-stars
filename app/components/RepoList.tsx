@@ -21,7 +21,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Calendar, GitFork, Loader2, Search, Star } from "lucide-react";
 import { useEffect, useState } from "react";
-import { loadMoreRepositories, searchRepositories } from "../_actions";
+import { loadMoreRepositories, searchRepositories, aiSearchRepositories } from "../_actions";
+import AISearchBar from "./AISearchBar";
 
 interface Repository {
   name: string;
@@ -81,6 +82,7 @@ export default function RepoList({ initialRepos, total }: RepoListProps) {
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   const [isFiltering, setIsFiltering] = useState(false);
   const [prevLanguage, setPrevLanguage] = useState("all");
+  const [isAiSearching, setIsAiSearching] = useState(false);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -125,6 +127,28 @@ export default function RepoList({ initialRepos, total }: RepoListProps) {
       console.error("Error searching data:", error);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleAISearch(query: string) {
+    setIsAiSearching(true);
+    setLoading(true);
+    setIsFiltering(true);
+    
+    try {
+      const results = await aiSearchRepositories({
+        query,
+        offset: 0,
+        limit,
+      });
+      
+      setRepositories(results as Repository[]);
+      setOffset(limit);
+    } catch (error) {
+      console.error("AI search error:", error);
+    } finally {
+      setLoading(false);
+      setIsAiSearching(false);
     }
   }
 
@@ -186,6 +210,8 @@ export default function RepoList({ initialRepos, total }: RepoListProps) {
 
   return (
     <>
+      <AISearchBar onSearch={handleAISearch} isLoading={isAiSearching} />
+      
       <div className="flex flex-col md:flex-row gap-4 mb-8">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -197,7 +223,7 @@ export default function RepoList({ initialRepos, total }: RepoListProps) {
             onKeyDown={handleKeyDown}
             disabled={loading}
           />
-          {loading && (
+          {loading && !isAiSearching && (
             <div className="absolute right-3 top-1/2 -translate-y-1/2">
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
             </div>

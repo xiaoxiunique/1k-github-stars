@@ -6,7 +6,7 @@ import { Metadata } from "next";
 export const metadata: Metadata = {
   title: "GitHub Star Tracker | Track Popular GitHub Repositories",
   description: "Track and discover GitHub repositories with over 1,000 stars. Stay updated with the most popular open-source projects.",
-  keywords: "GitHub, repositories, stars, open source, tracking, developer tools",
+  keywords: "GitHub, repositories, stars, open source, tracking, developer tools, AI search",
   openGraph: {
     title: "GitHub Star Tracker",
     description: "Track and discover GitHub repositories with over 1,000 stars",
@@ -38,7 +38,7 @@ export default async function Home() {
           <div>
             <h1 className="text-3xl font-bold mb-2">GitHub Star Tracker</h1>
             <p className="text-muted-foreground">
-              Track repositories with over 1,000 stars on GitHub
+              Search for open source projects with 1000+ stars using keywords or <span className="text-purple-500 font-medium">AI natural language</span>
             </p>
           </div>
           <ThemeToggle />

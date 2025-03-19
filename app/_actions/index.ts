@@ -1,6 +1,7 @@
 "use server";
 
-import { db } from "./db";
+import { db, getDDL } from "./db";
+import { generateQueryConditions } from "./deepseek";
 
 export async function getTotal() {
   const result = await db.query({
@@ -72,4 +73,51 @@ export async function searchRepositories({
   });
 
   return await result.json();
+}
+
+export async function aiSearchRepositories({
+  query = "",
+  offset = 0,
+  limit = 50,
+}) {
+  if (!query || query.trim() === "") {
+    return await getRepositories(offset, limit);
+  }
+
+  try {
+    // Get database table structure
+    const ddl = await getDDL();
+    
+    // Use AI to generate query conditions
+    const result = await generateQueryConditions(ddl, query);
+    const aiResponse = result.object as unknown as {
+      success: boolean;
+      sqlQuery: string;
+      conditions: Array<{
+        field: string;
+        operator: string;
+        value: string;
+      }>;
+    };
+    
+    if (!aiResponse.success) {
+      console.log("AI query failed, returning default results");
+      return await getRepositories(offset, limit);
+    }
+    
+    // Execute AI-generated SQL query
+    const finalQuery = `${aiResponse.sqlQuery} order by stars desc LIMIT ${limit} OFFSET ${offset}`;
+    console.log("🚀 ~ finalQuery:", finalQuery)
+
+    const dbResult = await db.query({
+      query: finalQuery,
+      format: "JSONEachRow",
+    });
+    
+    return await dbResult.json();
+  } catch (error) {
+    console.error("AI search error:", error);
+    // Return default query results when error occurs
+    return await getRepositories(offset, limit);
+  }
 }
