@@ -1,36 +1,43 @@
 "use server";
 
-import { db, getDDL } from "./db";
-import { generateQueryConditions } from "./deepseek";
+import { mongoClient } from "./db";
 
 export async function getTotal() {
-  const result = await db.query({
-    query: "select count(1) as count from repos_new final",
-    format: "JSONEachRow",
-  });
-
-  const data = await result.json();
-
-  // @ts-ignore
-  return data?.[0]?.count ?? 0;
+  try {
+    await mongoClient.connect();
+    const database = mongoClient.db("1kgithub");
+    const collection = database.collection("repos");
+    
+    const count = await collection.countDocuments();
+    return count;
+  } catch (error) {
+    console.error("Error getting total count:", error);
+    return 0;
+  }
 }
 
 export async function getRepositories(offset = 0, limit = 50) {
-  const result = await db.query({
-    query: `select * from repos_new final order by stars desc limit ${limit} offset ${offset}`,
-    format: "JSONEachRow",
-  });
-
-  return await result.json();
+  try {
+    await mongoClient.connect();
+    const database = mongoClient.db("1kgithub");
+    const collection = database.collection("repos");
+    
+    const repos = await collection
+      .find({})
+      .sort({ stars: -1 })
+      .skip(offset)
+      .limit(limit)
+      .toArray();
+    
+    return repos;
+  } catch (error) {
+    console.error("Error getting repositories:", error);
+    return [];
+  }
 }
 
 export async function loadMoreRepositories(offset = 0, limit = 50) {
-  const result = await db.query({
-    query: `select * from repos_new final order by stars desc limit ${limit} offset ${offset}`,
-    format: "JSONEachRow",
-  });
-
-  return await result.json();
+  return getRepositories(offset, limit);
 }
 
 export async function searchRepositories({
@@ -39,82 +46,33 @@ export async function searchRepositories({
   offset = 0,
   limit = 50,
 }) {
-  let whereConditions = [];
-  let queryParams = [];
-
-  if (searchTerm && searchTerm.trim() !== "") {
-    whereConditions.push("description ILIKE ?");
-    queryParams.push(`%${searchTerm}%`);
-  }
-
-  if (language && language !== "all") {
-    whereConditions.push("language ILIKE ?");
-    queryParams.push(language);
-  }
-
-  let query = "SELECT * FROM repos_new final";
-
-  if (whereConditions.length > 0) {
-    query += " WHERE " + whereConditions.join(" AND ");
-  }
-
-  query += " ORDER BY stars DESC";
-  query += ` LIMIT ${limit} OFFSET ${offset}`;
-
-  queryParams.forEach((param) => {
-    query = query.replace("?", `'${param}'`);
-  });
-
-  console.log("Executing query:", query);
-
-  const result = await db.query({
-    query,
-    format: "JSONEachRow",
-  });
-
-  return await result.json();
-}
-
-export async function aiSearchRepositories({
-  query = "",
-  offset = 0,
-  limit = 50,
-}) {
-  if (!query || query.trim() === "") {
-    return await getRepositories(offset, limit);
-  }
-
   try {
-    // Use AI to generate query conditions
-    const result = await generateQueryConditions(``, query);
-    const aiResponse = result.object as unknown as {
-      success: boolean;
-      sqlQuery: string;
-      conditions: Array<{
-        field: string;
-        operator: string;
-        value: string;
-      }>;
-    };
+    await mongoClient.connect();
+    const database = mongoClient.db("1kgithub");
+    const collection = database.collection("repos");
     
-    if (!aiResponse.success) {
-      console.log("AI query failed, returning default results");
-      return await getRepositories(offset, limit);
+    const query: Record<string, any> = {};
+    
+    if (searchTerm && searchTerm.trim() !== "") {
+      query.description = { $regex: searchTerm, $options: "i" };
     }
     
-    // Execute AI-generated SQL query
-    const finalQuery = `${aiResponse.sqlQuery} order by stars desc LIMIT ${limit} OFFSET ${offset}`;
-    console.log("🚀 ~ finalQuery:", finalQuery)
-
-    const dbResult = await db.query({
-      query: finalQuery,
-      format: "JSONEachRow",
-    });
+    if (language && language !== "all") {
+      query.language = language;
+    }
     
-    return await dbResult.json();
+    console.log("Executing query:", JSON.stringify(query));
+    
+    const repos = await collection
+      .find(query)
+      .sort({ stars: -1 })
+      .skip(offset)
+      .limit(limit)
+      .toArray();
+    
+    return JSON.parse(JSON.stringify(repos));
   } catch (error) {
-    console.error("AI search error:", error);
-    // Return default query results when error occurs
-    return await getRepositories(offset, limit);
+    console.error("Error searching repositories:", error);
+    return [];
   }
 }

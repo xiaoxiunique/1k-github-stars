@@ -1,4 +1,5 @@
 import { createClient } from "@clickhouse/client";
+import { MongoClient, ServerApiVersion } from "mongodb";
 
 const parsedUrl = URL.parse(process.env.CLICKHOUSE_URL!);
 export const db = createClient({
@@ -14,8 +15,17 @@ export async function getDDL() {
   });
 
   const data = await result.json();
-  console.log("🚀 ~ getDDL ~ data:", data)
+  console.log("🚀 ~ getDDL ~ data:", data);
 
   // @ts-ignore
   return data[0].statement;
 }
+
+const uri = process.env.MONGODB_URL!;
+export const mongoClient = new MongoClient(uri, {
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: false,
+    deprecationErrors: true,
+  },
+});

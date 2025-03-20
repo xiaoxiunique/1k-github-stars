@@ -21,8 +21,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Calendar, GitFork, Loader2, Search, Star } from "lucide-react";
 import { useEffect, useState } from "react";
-import { loadMoreRepositories, searchRepositories, aiSearchRepositories } from "../_actions";
-import AISearchBar from "./AISearchBar";
+import { loadMoreRepositories, searchRepositories } from "../_actions";
+import { useRouter, useSearchParams } from "next/navigation";
 
 interface Repository {
   name: string;
@@ -72,36 +72,43 @@ interface RepoListProps {
 }
 
 export default function RepoList({ initialRepos, total }: RepoListProps) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // 从 URL 获取初始搜索词和语言
+  const initialSearchTerm = searchParams.get("search") || "";
+  const initialLanguage = searchParams.get("language") || "all";
+
   const [repositories, setRepositories] = useState<Repository[]>(initialRepos);
   const [loading, setLoading] = useState(false);
   const [offset, setOffset] = useState(50);
   const limit = 50;
 
-  const [searchTerm, setSearchTerm] = useState("");
-  const [selectedLanguage, setSelectedLanguage] = useState("all");
-  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
-  const [isFiltering, setIsFiltering] = useState(false);
-  const [prevLanguage, setPrevLanguage] = useState("all");
-  const [isAiSearching, setIsAiSearching] = useState(false);
+  const [searchTerm, setSearchTerm] = useState(initialSearchTerm);
+  const [selectedLanguage, setSelectedLanguage] = useState(initialLanguage);
+  const [isFiltering, setIsFiltering] = useState(
+    initialSearchTerm !== "" || initialLanguage !== "all"
+  );
+  const [prevLanguage, setPrevLanguage] = useState(initialLanguage);
 
+  // 初始加载时，如果 URL 中有搜索参数，执行搜索
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedSearchTerm(searchTerm);
-    }, 500);
-
-    return () => clearTimeout(timer);
-  }, [searchTerm]);
-
-  useEffect(() => {
-    if (debouncedSearchTerm || selectedLanguage !== "all") {
-      if (selectedLanguage !== prevLanguage) {
-        setPrevLanguage(selectedLanguage);
-        performSearch(true);
-      } else {
-        performSearch();
-      }
+    if (initialSearchTerm || initialLanguage !== "all") {
+      performSearch(true);
     }
-  }, [debouncedSearchTerm, selectedLanguage, prevLanguage]);
+  }, []);
+
+  // 更新 URL 的函数
+  const updateUrl = (search: string, language: string) => {
+    const params = new URLSearchParams();
+    if (search) params.set("search", search);
+    if (language && language !== "all") params.set("language", language);
+
+    const newUrl = `${window.location.pathname}${
+      params.toString() ? "?" + params.toString() : ""
+    }`;
+    router.push(newUrl, { scroll: false });
+  };
 
   async function performSearch(resetOffset = true) {
     setIsFiltering(true);
@@ -110,17 +117,23 @@ export default function RepoList({ initialRepos, total }: RepoListProps) {
     try {
       const searchOffset = resetOffset ? 0 : offset;
       const results = await searchRepositories({
-        searchTerm: debouncedSearchTerm,
+        searchTerm: searchTerm,
         language: selectedLanguage,
         offset: searchOffset,
         limit,
       });
 
+      // 更新 URL
+      updateUrl(searchTerm, selectedLanguage);
+
       if (resetOffset) {
-        setRepositories(results as Repository[]);
+        setRepositories(results as unknown as Repository[]);
         setOffset(limit);
       } else {
-        setRepositories([...repositories, ...(results as Repository[])]);
+        setRepositories([
+          ...repositories,
+          ...(results as unknown as Repository[]),
+        ]);
         setOffset(searchOffset + limit);
       }
     } catch (error) {
@@ -128,38 +141,6 @@ export default function RepoList({ initialRepos, total }: RepoListProps) {
     } finally {
       setLoading(false);
     }
-  }
-
-  async function handleAISearch(query: string) {
-    setIsAiSearching(true);
-    setLoading(true);
-    setIsFiltering(true);
-    
-    try {
-      const results = await aiSearchRepositories({
-        query,
-        offset: 0,
-        limit,
-      });
-      
-      setRepositories(results as Repository[]);
-      setOffset(limit);
-    } catch (error) {
-      console.error("AI search error:", error);
-    } finally {
-      setLoading(false);
-      setIsAiSearching(false);
-    }
-  }
-
-  function resetFilters() {
-    setSearchTerm("");
-    setDebouncedSearchTerm("");
-    setSelectedLanguage("all");
-    setPrevLanguage("all");
-    setIsFiltering(false);
-    setRepositories(initialRepos);
-    setOffset(50);
   }
 
   function handleSearchChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -174,17 +155,26 @@ export default function RepoList({ initialRepos, total }: RepoListProps) {
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter" && searchTerm.trim() !== "") {
       e.preventDefault();
-
-      setDebouncedSearchTerm(searchTerm);
-      performSearch();
+      performSearch(true);
     }
   }
 
   function handleSearch() {
     if (searchTerm.trim() !== "") {
-      setDebouncedSearchTerm(searchTerm);
-      performSearch();
+      performSearch(true);
     }
+  }
+
+  function resetFilters() {
+    setSearchTerm("");
+    setSelectedLanguage("all");
+    setPrevLanguage("all");
+    setIsFiltering(false);
+    setRepositories(initialRepos);
+    setOffset(50);
+
+    // 清除 URL 参数
+    router.push(window.location.pathname, { scroll: false });
   }
 
   async function loadMore() {
@@ -194,7 +184,10 @@ export default function RepoList({ initialRepos, total }: RepoListProps) {
         await performSearch(false);
       } else {
         const newRepos = await loadMoreRepositories(offset, limit);
-        setRepositories([...repositories, ...(newRepos as Repository[])]);
+        setRepositories([
+          ...repositories,
+          ...(newRepos as unknown as Repository[]),
+        ]);
         setOffset(offset + limit);
       }
     } catch (error) {
@@ -206,12 +199,14 @@ export default function RepoList({ initialRepos, total }: RepoListProps) {
 
   function handleLanguageChange(value: string) {
     setSelectedLanguage(value);
+    // 语言改变时更新 URL 并执行搜索
+    updateUrl(searchTerm, value);
+    setPrevLanguage(value);
+    performSearch(true);
   }
 
   return (
     <>
-      <AISearchBar onSearch={handleAISearch} isLoading={isAiSearching} />
-      
       <div className="flex flex-col md:flex-row gap-4 mb-8">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -223,7 +218,7 @@ export default function RepoList({ initialRepos, total }: RepoListProps) {
             onKeyDown={handleKeyDown}
             disabled={loading}
           />
-          {loading && !isAiSearching && (
+          {loading && (
             <div className="absolute right-3 top-1/2 -translate-y-1/2">
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
             </div>
@@ -259,9 +254,7 @@ export default function RepoList({ initialRepos, total }: RepoListProps) {
               ))}
             </SelectContent>
           </Select>
-          {(isFiltering ||
-            debouncedSearchTerm ||
-            selectedLanguage !== "all") && (
+          {(isFiltering || selectedLanguage !== "all") && (
             <Button variant="outline" onClick={resetFilters} disabled={loading}>
               Reset Filters
             </Button>
