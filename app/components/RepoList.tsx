@@ -19,10 +19,37 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Calendar, GitFork, Loader2, Search, Star } from "lucide-react";
+import {
+  Calendar,
+  GitFork,
+  Loader2,
+  Search,
+  Star,
+  FolderPlus,
+  ListFilter,
+} from "lucide-react";
 import { useEffect, useState } from "react";
-import { loadMoreRepositories, searchRepositories } from "../_actions";
+import {
+  loadMoreRepositories,
+  searchRepositories,
+  getUserCategories,
+  createCategory,
+} from "../actions";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useSession } from "next-auth/react";
+import StarredRepos from "./StarredRepos";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { signIn } from "next-auth/react";
 
 interface Repository {
   name: string;
@@ -71,17 +98,28 @@ interface RepoListProps {
   total: number;
 }
 
+interface Category {
+  id: string;
+  name: string;
+  description: string;
+  createdAt: string;
+  userId: string;
+}
+
 export default function RepoList({ initialRepos, total }: RepoListProps) {
+  const { data: session, status } = useSession();
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  // 从 URL 获取初始搜索词和语言
+  // Initial search term and language from URL
   const initialSearchTerm = searchParams.get("search") || "";
   const initialLanguage = searchParams.get("language") || "all";
+  const initialTab = searchParams.get("tab") || "explore";
 
   const [repositories, setRepositories] = useState<Repository[]>(initialRepos);
   const [loading, setLoading] = useState(false);
   const [offset, setOffset] = useState(50);
+  const [activeTab, setActiveTab] = useState(initialTab);
   const limit = 50;
 
   const [searchTerm, setSearchTerm] = useState(initialSearchTerm);
@@ -91,23 +129,108 @@ export default function RepoList({ initialRepos, total }: RepoListProps) {
   );
   const [prevLanguage, setPrevLanguage] = useState(initialLanguage);
 
-  // 初始加载时，如果 URL 中有搜索参数，执行搜索
+  // Category-related states
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
+  const [formData, setFormData] = useState({ name: "", description: "" });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isOpen, setIsOpen] = useState(false);
+  const [categoryError, setCategoryError] = useState("");
+
+  // 添加到分类相关状态
+  const [selectedRepo, setSelectedRepo] = useState<Repository | null>(null);
+  const [addToCategoryOpen, setAddToCategoryOpen] = useState(false);
+  const [selectedCategoryId, setSelectedCategoryId] = useState("");
+
+  // At initial load, perform search if URL has search parameters
   useEffect(() => {
     if (initialSearchTerm || initialLanguage !== "all") {
       performSearch(true);
     }
   }, []);
 
+  // Fetch user categories
+  useEffect(() => {
+    if (activeTab === "categories" && status === "authenticated") {
+      fetchCategories();
+    }
+  }, [activeTab, status]);
+
+  // Get user's category list
+  const fetchCategories = async () => {
+    if (status !== "authenticated") return;
+
+    setCategoriesLoading(true);
+    try {
+      const response = await getUserCategories();
+      if (response.categories) {
+        setCategories(response.categories);
+      }
+    } catch (err) {
+      console.error("Failed to fetch categories:", err);
+    } finally {
+      setCategoriesLoading(false);
+    }
+  };
+
+  // Handle creating new category
+  const handleCreateCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    setCategoryError("");
+
+    try {
+      if (!formData.name.trim()) {
+        setCategoryError("Category name cannot be empty");
+        return;
+      }
+
+      const result = await createCategory({
+        name: formData.name,
+        description: formData.description,
+      });
+
+      if (result.success) {
+        // Add new category to the list
+        if (result.category) {
+          setCategories((prev) => [...prev, result.category as Category]);
+        }
+        // Reset form and close dialog
+        setFormData({ name: "", description: "" });
+        setIsOpen(false);
+      } else {
+        setCategoryError(result.error || "Failed to create category");
+      }
+    } catch (err) {
+      console.error("Error creating category:", err);
+      setCategoryError("An error occurred while creating the category");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // 查看分类详情
+  const viewCategory = (categoryId: string) => {
+    router.push(`/category/${categoryId}`);
+  };
+
   // 更新 URL 的函数
-  const updateUrl = (search: string, language: string) => {
+  const updateUrl = (search: string, language: string, tab: string) => {
     const params = new URLSearchParams();
     if (search) params.set("search", search);
     if (language && language !== "all") params.set("language", language);
+    if (tab !== "explore") params.set("tab", tab);
 
     const newUrl = `${window.location.pathname}${
       params.toString() ? "?" + params.toString() : ""
     }`;
     router.push(newUrl, { scroll: false });
+  };
+
+  // 选项卡改变处理函数
+  const handleTabChange = (value: string) => {
+    setActiveTab(value);
+    updateUrl(searchTerm, selectedLanguage, value);
   };
 
   async function performSearch(resetOffset = true) {
@@ -124,7 +247,7 @@ export default function RepoList({ initialRepos, total }: RepoListProps) {
       });
 
       // 更新 URL
-      updateUrl(searchTerm, selectedLanguage);
+      updateUrl(searchTerm, selectedLanguage, activeTab);
 
       if (resetOffset) {
         setRepositories(results as unknown as Repository[]);
@@ -173,8 +296,8 @@ export default function RepoList({ initialRepos, total }: RepoListProps) {
     setRepositories(initialRepos);
     setOffset(50);
 
-    // 清除 URL 参数
-    router.push(window.location.pathname, { scroll: false });
+    // 清除 URL 参数，但保留标签页
+    updateUrl("", "all", activeTab);
   }
 
   async function loadMore() {
@@ -200,10 +323,20 @@ export default function RepoList({ initialRepos, total }: RepoListProps) {
   function handleLanguageChange(value: string) {
     setSelectedLanguage(value);
     // 语言改变时更新 URL 并执行搜索
-    updateUrl(searchTerm, value);
+    updateUrl(searchTerm, value, activeTab);
     setPrevLanguage(value);
     performSearch(true);
   }
+
+  // 添加到分类的处理函数
+  const handleAddToCategory = () => {
+    if (!selectedRepo || !selectedCategoryId) return;
+
+    // 重定向到分类详情页，并传递仓库信息
+    router.push(
+      `/category/${selectedCategoryId}?repo=${selectedRepo.name}&owner=${selectedRepo.user_name}`
+    );
+  };
 
   return (
     <>
@@ -262,19 +395,110 @@ export default function RepoList({ initialRepos, total }: RepoListProps) {
         </div>
       </div>
 
-      <Tabs defaultValue="grid" className="mb-8">
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="mb-8">
         <div className="flex justify-between items-center">
           <TabsList>
-            <TabsTrigger value="grid">Grid View</TabsTrigger>
+            <TabsTrigger value="explore">Explore Projects</TabsTrigger>
+            <TabsTrigger
+              value="starred"
+              disabled={status === "unauthenticated"}
+            >
+              Starred Projects
+            </TabsTrigger>
+            <TabsTrigger
+              value="categories"
+              disabled={status === "unauthenticated"}
+            >
+              My Categories
+            </TabsTrigger>
           </TabsList>
-          <div className="text-sm text-muted-foreground">
-            Showing <strong>{repositories.length}</strong> of{" "}
-            <strong>{total.toLocaleString()}</strong> repositories
-            {isFiltering && " (filtered)"}
-          </div>
+          {activeTab === "explore" && (
+            <div className="text-sm text-muted-foreground">
+              Showing <strong>{repositories.length}</strong> of{" "}
+              <strong>{total.toLocaleString()}</strong> repositories
+              {isFiltering && " (filtered)"}
+            </div>
+          )}
+
+          {activeTab === "categories" && status === "authenticated" && (
+            <Dialog open={isOpen} onOpenChange={setIsOpen}>
+              <DialogTrigger asChild>
+                <Button>
+                  <FolderPlus className="mr-2 h-4 w-4" />
+                  Create New Category
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <form onSubmit={handleCreateCategory}>
+                  <DialogHeader>
+                    <DialogTitle>Create New Category</DialogTitle>
+                    <DialogDescription>
+                      Create a new category to organize and track GitHub
+                      projects you're interested in
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 py-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="name">Category Name *</Label>
+                      <Input
+                        id="name"
+                        placeholder="e.g. AI Projects, Utility Libraries, etc."
+                        value={formData.name}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            name: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="description">Category Description</Label>
+                      <Textarea
+                        id="description"
+                        placeholder="Describe the theme and collection goals of this category..."
+                        value={formData.description}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            description: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                    {categoryError && (
+                      <p className="text-sm text-destructive">
+                        {categoryError}
+                      </p>
+                    )}
+                  </div>
+                  <DialogFooter>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setIsOpen(false)}
+                      disabled={isSubmitting}
+                    >
+                      Cancel
+                    </Button>
+                    <Button type="submit" disabled={isSubmitting}>
+                      {isSubmitting ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Creating...
+                        </>
+                      ) : (
+                        "Create Category"
+                      )}
+                    </Button>
+                  </DialogFooter>
+                </form>
+              </DialogContent>
+            </Dialog>
+          )}
         </div>
 
-        <TabsContent value="grid" className="mt-6">
+        <TabsContent value="explore" className="mt-6">
           {loading && repositories.length === 0 ? (
             <div className="flex justify-center items-center py-20">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -359,9 +583,76 @@ export default function RepoList({ initialRepos, total }: RepoListProps) {
             </div>
           )}
         </TabsContent>
+
+        <TabsContent value="starred" className="mt-6">
+          <StarredRepos />
+        </TabsContent>
+
+        <TabsContent value="categories" className="mt-6">
+          {status === "unauthenticated" ? (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <p className="mb-4 text-muted-foreground">
+                Please login to view your project categories
+              </p>
+              <Button onClick={() => signIn("github")}>
+                Login with GitHub
+              </Button>
+            </div>
+          ) : categoriesLoading ? (
+            <div className="flex justify-center items-center py-20">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <span className="ml-2 text-muted-foreground">
+                Loading categories...
+              </span>
+            </div>
+          ) : categories.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {categories.map((category) => (
+                <Card key={category.id} className="overflow-hidden">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-xl">{category.name}</CardTitle>
+                    <CardDescription className="text-sm text-muted-foreground">
+                      Created on{" "}
+                      {new Date(category.createdAt).toLocaleDateString()}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="pb-3">
+                    <p className="text-sm text-muted-foreground line-clamp-2 min-h-[3em]">
+                      {category.description || "No description"}
+                    </p>
+                  </CardContent>
+                  <CardFooter className="pt-3 border-t">
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => viewCategory(category.id)}
+                    >
+                      <ListFilter className="mr-2 h-4 w-4" />
+                      View Projects
+                    </Button>
+                  </CardFooter>
+                </Card>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-12 border rounded-lg bg-muted/20">
+              <ListFilter className="h-12 w-12 mx-auto text-muted-foreground opacity-50" />
+              <h3 className="mt-4 text-lg font-medium">No Categories Yet</h3>
+              <p className="mt-2 text-sm text-muted-foreground max-w-md mx-auto">
+                Create your first category to start collecting and organizing
+                GitHub projects you're interested in
+              </p>
+              <Button className="mt-6" onClick={() => setIsOpen(true)}>
+                <FolderPlus className="mr-2 h-4 w-4" />
+                Create Category
+              </Button>
+            </div>
+          )}
+        </TabsContent>
       </Tabs>
 
-      {repositories.length > 0 &&
+      {activeTab === "explore" &&
+        repositories.length > 0 &&
         (!isFiltering || repositories.length >= limit ? (
           <div className="flex justify-center">
             <Button variant="outline" onClick={loadMore} disabled={loading}>

@@ -2,11 +2,14 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { getRepositories, getTotal } from "./_actions";
 import RepoList from "./components/RepoList";
 import { Metadata } from "next";
+import { LoginButton } from "@/components/login-button";
 
 export const metadata: Metadata = {
   title: "GitHub Star Tracker | Track Popular GitHub Repositories",
-  description: "Track and discover GitHub repositories with over 1,000 stars. Stay updated with the most popular open-source projects.",
-  keywords: "GitHub, repositories, stars, open source, tracking, developer tools, AI search",
+  description:
+    "Track and discover GitHub repositories with over 1,000 stars. Stay updated with the most popular open-source projects.",
+  keywords:
+    "GitHub, repositories, stars, open source, tracking, developer tools, AI search",
   openGraph: {
     title: "GitHub Star Tracker",
     description: "Track and discover GitHub repositories with over 1,000 stars",
@@ -23,7 +26,7 @@ export const metadata: Metadata = {
   robots: {
     index: true,
     follow: true,
-  }
+  },
 };
 
 export default async function Home() {
@@ -38,10 +41,15 @@ export default async function Home() {
           <div>
             <h1 className="text-3xl font-bold mb-2">GitHub Star Tracker</h1>
             <p className="text-muted-foreground">
-              Search for open source projects with 1000+ stars using keywords or <span className="text-purple-500 font-medium">AI natural language</span>
+              Search for open source projects with 1000+ stars using keywords or{" "}
+              <span className="text-purple-500 font-medium">
+                AI natural language
+              </span>
             </p>
           </div>
-          <ThemeToggle />
+          <div className="flex items-center space-x-4">
+            <LoginButton />
+          </div>
         </header>
 
         <RepoList initialRepos={initialRepos} total={total} />
