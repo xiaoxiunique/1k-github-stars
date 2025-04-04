@@ -8,7 +8,7 @@ import { MongoClient, ObjectId } from "mongodb";
 let client: ClickHouseClient;
 let mongoClient: MongoClient;
 
-// 获取MongoDB连接
+// Get MongoDB connection
 async function getMongoClient() {
   if (!mongoClient) {
     mongoClient = new MongoClient(process.env.MONGODB_URL as string);
@@ -123,7 +123,7 @@ export async function getTotal() {
   });
 
   const data = await result.json();
-  // 使用断言来确保TypeScript识别正确的类型
+  // Use assertion to ensure TypeScript recognizes the correct type
   return (data[0] as any)?.total || 0;
 }
 
@@ -131,26 +131,26 @@ export async function loadMoreRepositories(offset: number, limit: number) {
   return getRepositories(offset, limit);
 }
 
-// 分类管理功能
+// Category management functions
 export async function createCategory(data: { name: string; description: string }) {
   const session = await getServerSession(authOptions);
   
   if (!session || !session.user) {
-    return { success: false, error: "未登录" };
+    return { success: false, error: "Not logged in" };
   }
   
   try {
     const mongo = await getMongoClient();
     const db = mongo.db();
     
-    // 创建新分类
+    // Create new category
     const category = {
       name: data.name,
       description: data.description,
       createdAt: new Date(),
       updatedAt: new Date(),
       userId: session.user.id,
-      repos: [] // 初始为空数组
+      repos: [] // Initially an empty array
     };
     
     const result = await db.collection("categories").insertOne(category);
@@ -166,8 +166,8 @@ export async function createCategory(data: { name: string; description: string }
       } 
     };
   } catch (error) {
-    console.error("创建分类出错:", error);
-    return { success: false, error: "创建分类失败" };
+    console.error("Error creating category:", error);
+    return { success: false, error: "Failed to create category" };
   }
 }
 
@@ -175,7 +175,7 @@ export async function getUserCategories() {
   const session = await getServerSession(authOptions);
   
   if (!session || !session.user) {
-    return { categories: [], error: "未登录" };
+    return { categories: [], error: "Not logged in" };
   }
   
   try {
@@ -199,8 +199,8 @@ export async function getUserCategories() {
       error: null 
     };
   } catch (error) {
-    console.error("获取分类出错:", error);
-    return { categories: [], error: "获取分类失败" };
+    console.error("Error getting categories:", error);
+    return { categories: [], error: "Failed to get categories" };
   }
 }
 
@@ -208,27 +208,27 @@ export async function deleteCategory(categoryId: string) {
   const session = await getServerSession(authOptions);
   
   if (!session || !session.user) {
-    return { success: false, error: "未登录" };
+    return { success: false, error: "Not logged in" };
   }
   
   try {
     const mongo = await getMongoClient();
     const db = mongo.db();
     
-    // 确保用户只能删除自己的分类
+    // Ensure users can only delete their own categories
     const result = await db.collection("categories").deleteOne({
       _id: new ObjectId(categoryId),
       userId: session.user.id
     });
     
     if (result.deletedCount === 0) {
-      return { success: false, error: "分类不存在或无权删除" };
+      return { success: false, error: "Category doesn't exist or you don't have permission to delete it" };
     }
     
     return { success: true };
   } catch (error) {
-    console.error("删除分类出错:", error);
-    return { success: false, error: "删除分类失败" };
+    console.error("Error deleting category:", error);
+    return { success: false, error: "Failed to delete category" };
   }
 }
 
@@ -236,7 +236,7 @@ export async function getCategoryById(categoryId: string) {
   const session = await getServerSession(authOptions);
   
   if (!session || !session.user) {
-    return { category: null, error: "未登录" };
+    return { category: null, error: "Not logged in" };
   }
   
   try {
@@ -248,12 +248,12 @@ export async function getCategoryById(categoryId: string) {
     });
     
     if (!category) {
-      return { category: null, error: "分类不存在" };
+      return { category: null, error: "Category doesn't exist" };
     }
     
-    // 如果不是自己的分类，检查是否为公开分类
+    // If it's not your own category, check if it's a public category
     if (category.userId !== session.user.id && !category.isPublic) {
-      return { category: null, error: "无权访问此分类" };
+      return { category: null, error: "You don't have permission to access this category" };
     }
     
     return { 
@@ -268,23 +268,23 @@ export async function getCategoryById(categoryId: string) {
       error: null 
     };
   } catch (error) {
-    console.error("获取分类详情出错:", error);
-    return { category: null, error: "获取分类详情失败" };
+    console.error("Error getting category details:", error);
+    return { category: null, error: "Failed to get category details" };
   }
 }
 
-// 获取用户已star的GitHub仓库
+// Get user's starred GitHub repositories
 export async function getUserStarredRepos(page = 1, limit = 100) {
   const session = await getServerSession(authOptions);
   
   if (!session || !session.user) {
-    return { repos: [], error: "未登录", total: 0, hasMore: false };
+    return { repos: [], error: "Not logged in", total: 0, hasMore: false };
   }
   
   try {
-    // 确保我们有访问令牌
+    // Ensure we have an access token
     if (!session.accessToken) {
-      return { repos: [], error: "没有可用的访问令牌", total: 0, hasMore: false };
+      return { repos: [], error: "No available access token", total: 0, hasMore: false };
     }
     
     const response = await fetch(`https://api.github.com/user/starred?per_page=${limit}&page=${page}`, {
@@ -295,14 +295,14 @@ export async function getUserStarredRepos(page = 1, limit = 100) {
     });
     
     if (!response.ok) {
-      throw new Error(`GitHub API错误: ${response.status}`);
+      throw new Error(`GitHub API error: ${response.status}`);
     }
     
     const starredRepos = await response.json();
     const linkHeader = response.headers.get('Link');
     const hasMore = linkHeader ? linkHeader.includes('rel="next"') : false;
     
-    // 获取总数
+    // Get total
     let total = 0;
     const userResponse = await fetch('https://api.github.com/user', {
       headers: {
@@ -316,7 +316,7 @@ export async function getUserStarredRepos(page = 1, limit = 100) {
       total = userData.public_repos || 0;
     }
     
-    // 将GitHub API返回的数据转换为我们应用中使用的格式
+    // Convert GitHub API returned data to format we use in our app
     const formattedRepos = starredRepos.map((repo: any) => ({
       name: repo.name,
       user_id: repo.owner.id,
@@ -339,7 +339,7 @@ export async function getUserStarredRepos(page = 1, limit = 100) {
       currentPage: page
     };
   } catch (error) {
-    console.error("获取星标仓库时出错:", error);
-    return { repos: [], error: "获取已Star的仓库失败", total: 0, hasMore: false };
+    console.error("Error getting starred repositories:", error);
+    return { repos: [], error: "Failed to get starred repositories", total: 0, hasMore: false };
   }
 } 

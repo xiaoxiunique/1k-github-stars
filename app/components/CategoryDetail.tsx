@@ -21,7 +21,7 @@ interface CategoryDetailProps {
   };
 }
 
-// 与RepoList相同的颜色映射
+// Same color mapping as in RepoList
 const languageColors: Record<string, string> = {
   JavaScript: "#f1e05a",
   TypeScript: "#2b7489",
@@ -43,31 +43,31 @@ export function CategoryDetail({ category }: CategoryDetailProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState("repos");
   
-  // 检查URL参数中是否有传入的仓库信息
+  // Check if repository information is passed in URL parameters
   const repoName = searchParams.get("repo");
   const repoOwner = searchParams.get("owner");
   
   useEffect(() => {
-    // 如果URL中包含仓库信息，切换到添加选项卡
+    // If URL contains repository information, switch to add tab
     if (repoName && repoOwner) {
       setActiveTab("add");
-      // 预填充搜索框
+      // Pre-fill search box
       setSearchQuery(`${repoOwner}/${repoName}`);
     }
   }, [repoName, repoOwner]);
 
-  // 暂时假设分类中的仓库为空，后续可以实现添加功能
+  // Temporarily assume the category's repositories are empty, can implement add functionality later
   const repos = category.repos || [];
 
-  // 返回到用户主页
+  // Return to user profile
   const handleBackToProfile = () => {
     router.push("/user");
   };
 
-  // 搜索功能实现后可以在这里处理
+  // Search functionality can be implemented here
   const handleSearch = () => {
     setLoading(true);
-    // TODO: 实现搜索匹配项目的功能
+    // TODO: Implement search matching project functionality
     setTimeout(() => {
       setLoading(false);
     }, 1000);
@@ -83,7 +83,7 @@ export function CategoryDetail({ category }: CategoryDetailProps) {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        {/* 侧边栏 */}
+        {/* Sidebar */}
         <div className="md:col-span-1">
           <Card>
             <CardHeader>
@@ -106,7 +106,7 @@ export function CategoryDetail({ category }: CategoryDetailProps) {
           </Card>
         </div>
 
-        {/* 主内容区 */}
+        {/* Main content area */}
         <div className="md:col-span-3">
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList className="mb-4">

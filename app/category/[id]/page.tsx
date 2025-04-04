@@ -1,27 +1,25 @@
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { authOptions } from "../../../lib/auth";
 import { redirect, notFound } from "next/navigation";
-import { getCategoryById } from "@/app/actions";
-import { CategoryDetail } from "@/app/components/CategoryDetail";
+import { getCategoryById } from "../../actions";
+import { CategoryDetail } from "../../components/CategoryDetail";
 
-interface CategoryPageProps {
-  params: {
-    id: string;
-  };
-}
-
-export default async function CategoryPage({ params }: CategoryPageProps) {
+export default async function CategoryPage({
+  params
+}: {
+  params: { id: string }
+}) {
   const session = await getServerSession(authOptions);
 
-  // 如果用户未登录，重定向到首页
+  // Redirect to homepage if user is not logged in
   if (!session) {
     redirect("/");
   }
 
-  // 获取分类详情
+  // Get category details
   const { category, error } = await getCategoryById(params.id);
 
-  // 如果分类不存在，显示404页面
+  // Show 404 page if category doesn't exist
   if (!category) {
     return notFound();
   }

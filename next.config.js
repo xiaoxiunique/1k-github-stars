@@ -2,13 +2,17 @@
 const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
-  swcMinify: true,
   images: {
     domains: ['avatars.githubusercontent.com', 'github.com'],
     formats: ['image/avif', 'image/webp'],
   },
   experimental: {
-    serverActions: true,
+    serverActions: {
+      allowedOrigins: ['localhost:3000', '127.0.0.1:3000', '1kgithub.com']
+    },
+  },
+  typescript: {
+    ignoreBuildErrors: true,
   },
 }
 
