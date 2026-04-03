@@ -5,12 +5,14 @@ export interface Repo {
   langIdx: number;
   description: string;
   growth: number;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface RepoData {
   langs: string[];
   colors: string[];
-  repos: [string, number, number, number, string, number][];
+  repos: [string, number, number, number, string, number, string?, string?][];
   total: number;
   exported: string;
 }

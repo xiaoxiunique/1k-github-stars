@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "refresh:growth": "node scripts/refresh-growth.mjs"
   },
   "dependencies": {
     "next": "16.2.2",

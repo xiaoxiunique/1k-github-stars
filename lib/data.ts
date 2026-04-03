@@ -1,7 +1,21 @@
 import type { RepoData, Repo, GroupData, Metric } from "./types";
+import { getRepoValue } from "./metrics";
 import rawData from "@/data/repos.json";
 
 const data = rawData as RepoData;
+export const DAILY_TRENDING_MIN_REPO_AGE_DAYS = 7;
+export const DAILY_TRENDING_MIN_BASELINE_STARS = 2500;
+const repoMetaIndex = new Map(
+  data.repos
+    .filter((row) => row[6] || row[7])
+    .map((row) => [
+      row[0],
+      {
+        createdAt: row[6],
+        updatedAt: row[7],
+      },
+    ])
+);
 
 export function getAllRepos(): Repo[] {
   return data.repos.map((r) => ({
@@ -26,15 +40,15 @@ export function getTotal(): number {
   return data.total;
 }
 
-export function getRepoValue(repo: Repo, metric: Metric): number {
-  if (metric === "stars") return repo.stars;
-  if (metric === "forks") return repo.forks;
-  if (metric === "growth") return Math.max(repo.growth, 0);
-  return repo.stars;
+export function getExportedAt(): string {
+  return data.exported;
 }
 
-export function getGroups(metric: Metric = "stars"): GroupData[] {
-  const repos = getAllRepos();
+export function getRepoSnapshotMeta(fullName: string) {
+  return repoMetaIndex.get(fullName) ?? null;
+}
+
+function groupRepos(repos: Repo[], metric: Metric = "stars"): GroupData[] {
   const langs = getLangs();
   const colors = getColors();
   const groups = new Map<string, { repos: Repo[]; total: number }>();
@@ -63,6 +77,46 @@ export function getGroups(metric: Metric = "stars"): GroupData[] {
       };
     })
     .sort((a, b) => b.total - a.total);
+}
+
+export function getGroups(metric: Metric = "stars"): GroupData[] {
+  return groupRepos(getAllRepos(), metric);
+}
+
+export function getDailyTrendingData() {
+  const exportedAtMs = new Date(data.exported).getTime();
+  const eligibleRepos: Repo[] = [];
+  let positiveGrowthRepoCount = 0;
+
+  for (const row of data.repos) {
+    const growth = row[5] ?? 0;
+    const baselineStars = row[1] - growth;
+    const createdAt = row[6];
+    const createdAtMs = createdAt ? new Date(createdAt).getTime() : Number.NaN;
+
+    if (baselineStars < DAILY_TRENDING_MIN_BASELINE_STARS) continue;
+    if (!Number.isFinite(createdAtMs)) continue;
+    if (exportedAtMs - createdAtMs < DAILY_TRENDING_MIN_REPO_AGE_DAYS * 24 * 60 * 60 * 1000) continue;
+
+    if (growth > 0) {
+      positiveGrowthRepoCount += 1;
+    }
+
+    eligibleRepos.push({
+      fullName: row[0],
+      stars: row[1],
+      forks: row[2],
+      langIdx: row[3],
+      description: row[4],
+      growth,
+    });
+  }
+
+  return {
+    groups: groupRepos(eligibleRepos),
+    eligibleRepoCount: eligibleRepos.length,
+    positiveGrowthRepoCount,
+  };
 }
 
 export function getGroupByLang(lang: string): GroupData | null {

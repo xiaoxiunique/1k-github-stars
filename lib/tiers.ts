@@ -1,5 +1,5 @@
 import type { Repo, Metric } from "./types";
-import { getRepoValue } from "./data";
+import { getRepoValue } from "./metrics";
 
 export interface Tier {
   label: string;

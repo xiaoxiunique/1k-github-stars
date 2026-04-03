@@ -4,8 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { squarify } from "@/lib/squarify";
 import { lighten, darken, contrastText, fmtK } from "@/lib/colors";
-import { getRepoValue } from "@/lib/data";
-import { Header } from "./Header";
+import { getRepoValue } from "@/lib/metrics";
+import { Header, type HeaderBreadcrumbItem } from "./Header";
 import { Panel, type PanelHandle } from "./Panel";
 import { Tooltip, type TooltipHandle } from "./Tooltip";
 import type { Repo, GroupData, Metric, RepoRect, GroupRect, Rect } from "@/lib/types";
@@ -34,6 +34,17 @@ type RepoLayoutItem = SquarifyRect & {
   val: number;
   repo: Repo | null;
   origIdx: number;
+};
+
+type RepoMeta = Pick<Repo, "createdAt" | "updatedAt">;
+
+type ActiveTooltip = {
+  fullName: string;
+  x: number;
+  y: number;
+  repo: Repo;
+  langName: string;
+  langColor: string;
 };
 
 // Dynamic tier computation based on data range
@@ -89,6 +100,12 @@ function forceEqualSplit(
   return tiers;
 }
 
+const METRIC_OPTIONS: Record<Metric, { key: Metric; label: string }> = {
+  stars: { key: "stars", label: "Stars" },
+  growth: { key: "growth", label: "30d Growth" },
+  forks: { key: "forks", label: "Forks" },
+};
+
 interface TreemapProps {
   mode: "overview" | "detail";
   groups?: GroupData[];
@@ -96,28 +113,121 @@ interface TreemapProps {
   total: number;
   tierLabel?: string;
   tierSlug?: string;
+  initialMetric?: Metric;
+  availableMetrics?: Metric[];
+  breadcrumbOverride?: HeaderBreadcrumbItem[];
+  infoOverride?: string;
+  fallbackMetric?: Metric;
+  fallbackNotice?: {
+    title: string;
+    detail: string;
+  };
 }
 
-export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug }: TreemapProps) {
+export function Treemap({
+  mode,
+  groups,
+  detailGroup,
+  total,
+  tierLabel,
+  tierSlug,
+  initialMetric = "stars",
+  availableMetrics = ["stars", "growth", "forks"],
+  breadcrumbOverride,
+  infoOverride,
+  fallbackMetric,
+  fallbackNotice,
+}: TreemapProps) {
   const router = useRouter();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<PanelHandle>(null);
   const tooltipRef = useRef<TooltipHandle>(null);
 
-  const [metric, setMetric] = useState<Metric>("stars");
+  const [metric, setMetric] = useState<Metric>(initialMetric);
   const [search, setSearch] = useState("");
   const [hasVisibleData, setHasVisibleData] = useState(true);
+  const [fallbackActive, setFallbackActive] = useState(false);
 
   const rectsRef = useRef<RepoRect[]>([]);
   const groupRectsRef = useRef<GroupRect[]>([]);
   const hoveredIdxRef = useRef(-1);
   const hoveredGroupRef = useRef(-1);
   const allReposRef = useRef<Repo[]>([]); // for detail panel
+  const activeMetricRef = useRef<Metric>(initialMetric);
+  const tooltipMetaCacheRef = useRef<Map<string, RepoMeta>>(new Map());
+  const tooltipMetaRequestRef = useRef<Map<string, Promise<RepoMeta | null>>>(new Map());
+  const activeTooltipRef = useRef<ActiveTooltip | null>(null);
 
-  const getVal = useCallback(
-    (r: Repo) => getRepoValue(r, metric),
-    [metric]
+  const metricOptions = availableMetrics.map((metricKey) => METRIC_OPTIONS[metricKey]);
+
+  const getMetricValue = useCallback((repo: Repo, metricKey: Metric) => getRepoValue(repo, metricKey), []);
+  const formatMetricValue = useCallback((metricKey: Metric, value: number) => {
+    if (metricKey === "growth") return `+${fmtK(value)}`;
+    if (metricKey === "forks") return `⑂ ${fmtK(value)}`;
+    return `★ ${fmtK(value)}`;
+  }, []);
+  const hideTooltip = useCallback(() => {
+    activeTooltipRef.current = null;
+    tooltipRef.current?.hide();
+  }, []);
+  const showRepoTooltip = useCallback(
+    (x: number, y: number, repo: Repo, langName: string, langColor: string) => {
+      const cachedMeta = tooltipMetaCacheRef.current.get(repo.fullName);
+      const tooltipRepo = cachedMeta ? { ...repo, ...cachedMeta } : repo;
+
+      activeTooltipRef.current = {
+        fullName: repo.fullName,
+        x,
+        y,
+        repo,
+        langName,
+        langColor,
+      };
+
+      tooltipRef.current?.show(x, y, tooltipRepo, langName, langColor, {
+        metaLoading: !cachedMeta,
+      });
+
+      if (cachedMeta || tooltipMetaRequestRef.current.has(repo.fullName)) {
+        return;
+      }
+
+      const request = fetch(
+        `/api/repo-meta?fullName=${encodeURIComponent(repo.fullName)}`
+      )
+        .then(async (response) => {
+          if (!response.ok) return null;
+          const payload = (await response.json()) as RepoMeta;
+          return {
+            createdAt: payload.createdAt,
+            updatedAt: payload.updatedAt,
+          };
+        })
+        .catch(() => null)
+        .finally(() => {
+          tooltipMetaRequestRef.current.delete(repo.fullName);
+        });
+
+      tooltipMetaRequestRef.current.set(repo.fullName, request);
+
+      request.then((meta) => {
+        if (!meta) return;
+        tooltipMetaCacheRef.current.set(repo.fullName, meta);
+
+        const activeTooltip = activeTooltipRef.current;
+        if (!activeTooltip || activeTooltip.fullName !== repo.fullName) return;
+
+        tooltipRef.current?.show(
+          activeTooltip.x,
+          activeTooltip.y,
+          { ...activeTooltip.repo, ...meta },
+          activeTooltip.langName,
+          activeTooltip.langColor
+        );
+      });
+    },
+    []
   );
 
   // ── Compute layout ──
@@ -131,19 +241,48 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
     const query = search.toLowerCase();
 
     if (mode === "overview" && groups) {
-      // Filter groups by search
-      const filtered = groups
-        .map((g) => {
-          const repos = query
-            ? g.repos.filter((r) => r.fullName.toLowerCase().includes(query))
-            : g.repos;
-          const filteredTotal = repos.reduce((s, r) => s + getVal(r), 0);
-          return { ...g, repos, total: filteredTotal, count: repos.length };
-        })
-        .filter((g) => g.total > 0)
-        .sort((a, b) => b.total - a.total);
+      const searchedGroups = groups.map((g) => ({
+        ...g,
+        repos: query
+          ? g.repos.filter((r) => r.fullName.toLowerCase().includes(query))
+          : g.repos,
+      }));
+      const hasSearchMatches = searchedGroups.some((g) => g.repos.length > 0);
 
-      setHasVisibleData(filtered.length > 0);
+      const buildGroupsForMetric = (metricKey: Metric) =>
+        searchedGroups
+          .map((g) => {
+            const repos = [...g.repos]
+              .filter((repo) => getMetricValue(repo, metricKey) > 0)
+              .sort((a, b) => getMetricValue(b, metricKey) - getMetricValue(a, metricKey));
+            const filteredTotal = repos.reduce((sum, repo) => sum + getMetricValue(repo, metricKey), 0);
+            return { ...g, repos, total: filteredTotal, count: repos.length };
+          })
+          .filter((g) => g.total > 0)
+          .sort((a, b) => b.total - a.total);
+
+      let activeMetric = metric;
+      let filtered = buildGroupsForMetric(metric);
+      let shouldUseFallback = false;
+
+      if (hasSearchMatches && filtered.length === 0 && fallbackMetric) {
+        const fallbackGroups = buildGroupsForMetric(fallbackMetric);
+        if (fallbackGroups.length > 0) {
+          filtered = fallbackGroups;
+          activeMetric = fallbackMetric;
+          shouldUseFallback = true;
+        }
+      }
+
+      activeMetricRef.current = activeMetric;
+      setFallbackActive(shouldUseFallback);
+      setHasVisibleData(hasSearchMatches && filtered.length > 0);
+
+      if (!hasSearchMatches || filtered.length === 0) {
+        groupRectsRef.current = [];
+        rectsRef.current = [];
+        return;
+      }
 
       const gItems: GroupLayoutItem[] = filtered.map((g) => ({
         val: g.total,
@@ -180,7 +319,7 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
           const SMALL_MAX = 30;
           const totalShow = Math.min(g.repos.length, TOP_N + SMALL_MAX);
           const shown: RepoLayoutItem[] = g.repos.slice(0, totalShow).map((r, idx) => ({
-            val: getVal(r),
+            val: getMetricValue(r, activeMetric),
             repo: r,
             origIdx: idx,
           }));
@@ -212,20 +351,49 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
       groupRectsRef.current = newGroupRects;
       rectsRef.current = newRects;
     } else if (mode === "detail" && detailGroup) {
-      const repos = query
+      const searchedRepos = query
         ? detailGroup.repos.filter((r) =>
             r.fullName.toLowerCase().includes(query)
           )
         : detailGroup.repos;
-      const sorted = [...repos].sort((a, b) => getVal(b) - getVal(a));
+      const buildReposForMetric = (metricKey: Metric) =>
+        [...searchedRepos]
+          .filter((repo) => getMetricValue(repo, metricKey) > 0)
+          .sort((a, b) => getMetricValue(b, metricKey) - getMetricValue(a, metricKey));
+
+      let activeMetric = metric;
+      let sorted = buildReposForMetric(metric);
+      let shouldUseFallback = false;
+
+      if (searchedRepos.length > 0 && sorted.length === 0 && fallbackMetric) {
+        const fallbackRepos = buildReposForMetric(fallbackMetric);
+        if (fallbackRepos.length > 0) {
+          sorted = fallbackRepos;
+          activeMetric = fallbackMetric;
+          shouldUseFallback = true;
+        }
+      }
+
+      activeMetricRef.current = activeMetric;
+      setFallbackActive(shouldUseFallback);
       allReposRef.current = sorted;
-      setHasVisibleData(sorted.some((repo) => getVal(repo) > 0));
+      setHasVisibleData(searchedRepos.length > 0 && sorted.length > 0);
+
+      if (searchedRepos.length === 0 || sorted.length === 0) {
+        rectsRef.current = [];
+        groupRectsRef.current = [];
+        return;
+      }
 
       // If few enough repos, show flat (no grouping needed)
       const MAX_FLAT = 36;
       if (sorted.length <= MAX_FLAT) {
         // Flat layout — all repos as individual cells
-        const shown: RepoLayoutItem[] = sorted.map((r, idx) => ({ val: getVal(r), repo: r, origIdx: idx }));
+        const shown: RepoLayoutItem[] = sorted.map((r, idx) => ({
+          val: getMetricValue(r, activeMetric),
+          repo: r,
+          origIdx: idx,
+        }));
         squarify(shown, 0, 0, W, H);
         const newRects: RepoRect[] = [];
         for (const it of shown) {
@@ -235,18 +403,23 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
         groupRectsRef.current = [];
       } else {
         // Dynamic tier grouping based on actual data range
-        const maxVal = getVal(sorted[0]);
-        const minVal = getVal(sorted[sorted.length - 1]);
-        const tiers = computeDynamicTiers(minVal, maxVal, sorted, getVal);
+        const metricGetter = (repo: Repo) => getMetricValue(repo, activeMetric);
+        const maxVal = metricGetter(sorted[0]);
+        const minVal = metricGetter(sorted[sorted.length - 1]);
+        const tiers = computeDynamicTiers(minVal, maxVal, sorted, metricGetter);
 
         const tierGroups: TierGroup[] = [];
         for (const tier of tiers) {
           const tierRepos = sorted.filter((r) => {
-            const v = getVal(r);
+            const v = metricGetter(r);
             return v >= tier.min && v < tier.max;
           });
           if (tierRepos.length > 0) {
-            tierGroups.push({ label: tier.label, repos: tierRepos, total: tierRepos.reduce((s, r) => s + getVal(r), 0) });
+            tierGroups.push({
+              label: tier.label,
+              repos: tierRepos,
+              total: tierRepos.reduce((sum, repo) => sum + metricGetter(repo), 0),
+            });
           }
         }
 
@@ -257,12 +430,12 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
           tierGroups.length = 0;
           for (let i = 0; i < sorted.length; i += chunkSize) {
             const chunk = sorted.slice(i, i + chunkSize);
-            const hi = getVal(chunk[0]);
-            const lo = getVal(chunk[chunk.length - 1]);
+            const hi = metricGetter(chunk[0]);
+            const lo = metricGetter(chunk[chunk.length - 1]);
             tierGroups.push({
               label: `★ ${fmtK(lo)}–${fmtK(hi)}`,
               repos: chunk,
-              total: chunk.reduce((s, r) => s + getVal(r), 0),
+              total: chunk.reduce((sum, repo) => sum + metricGetter(repo), 0),
             });
           }
         }
@@ -301,7 +474,7 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
           const SMALL_MAX = 30;
           const totalShow = Math.min(g.repos.length, TOP_N + SMALL_MAX);
           const shown: RepoLayoutItem[] = g.repos.slice(0, totalShow).map((r, idx) => ({
-            val: getVal(r),
+            val: metricGetter(r),
             repo: r,
             origIdx: idx,
           }));
@@ -336,7 +509,7 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
       } // end else (grouped layout)
       allReposRef.current = sorted;
     }
-  }, [mode, groups, detailGroup, metric, search, getVal]);
+  }, [mode, groups, detailGroup, metric, search, getMetricValue, fallbackMetric]);
 
   // ── Render ──
   const render = useCallback(() => {
@@ -350,6 +523,7 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
     const gRects = groupRectsRef.current;
     const hovIdx = hoveredIdxRef.current;
     const hovG = hoveredGroupRef.current;
+    const activeMetric = activeMetricRef.current;
 
     ctx.save();
     ctx.scale(dpr, dpr);
@@ -420,7 +594,7 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
             ctx.fillText(name, r.x + 4, r.y + r.h * 0.36);
             ctx.font = `400 ${Math.max(7, fs * 0.6)}px system-ui`;
             ctx.globalAlpha = 0.55;
-            ctx.fillText(`★ ${fmtK(repo.stars)}`, r.x + 4, r.y + r.h * 0.64);
+            ctx.fillText(formatMetricValue(activeMetric, getMetricValue(repo, activeMetric)), r.x + 4, r.y + r.h * 0.64);
             ctx.globalAlpha = 1;
           } else {
             ctx.fillText(name, r.x + 3, r.y + r.h / 2);
@@ -446,7 +620,7 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
         ctx.rect(g.x + GAP, g.y + GAP, g.w - GAP * 2, g.headerH);
         ctx.clip();
         ctx.fillText(
-          `${g.lang}  ${fmtK(g.total)}★  ${g.count.toLocaleString()}`,
+          `${g.lang}  ${formatMetricValue(activeMetric, g.total)}  ${g.count.toLocaleString()}`,
           g.x + 6,
           g.y + GAP + g.headerH / 2
         );
@@ -518,7 +692,7 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
             ctx.fillText(name, r.x + 4, r.y + r.h * 0.36);
             ctx.font = `400 ${Math.max(7, fs * 0.6)}px system-ui`;
             ctx.globalAlpha = 0.55;
-            ctx.fillText(`★ ${fmtK(repo.stars)}`, r.x + 4, r.y + r.h * 0.64);
+            ctx.fillText(formatMetricValue(activeMetric, getMetricValue(repo, activeMetric)), r.x + 4, r.y + r.h * 0.64);
             ctx.globalAlpha = 1;
           } else {
             ctx.fillText(name, r.x + 3, r.y + r.h / 2);
@@ -544,7 +718,7 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
         ctx.rect(g.x + GAP, g.y + GAP, g.w - GAP * 2, g.headerH);
         ctx.clip();
         ctx.fillText(
-          `${g.lang}  ${g.count.toLocaleString()} repos`,
+          `${g.lang}  ${formatMetricValue(activeMetric, g.total)}  ${g.count.toLocaleString()} repos`,
           g.x + 6,
           g.y + GAP + g.headerH / 2
         );
@@ -553,7 +727,7 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
     }
 
     ctx.restore();
-  }, [mode, detailGroup]);
+  }, [mode, formatMetricValue, getMetricValue]);
 
   // ── Resize ──
   const resize = useCallback(() => {
@@ -639,12 +813,12 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
             hoveredGroupRef.current = r.groupIdx!;
             needRender = true;
           }
-          if (repo) tooltipRef.current?.show(e.clientX, e.clientY, repo, detailGroup!.lang, detailGroup!.color);
+          if (repo) showRepoTooltip(e.clientX, e.clientY, repo, detailGroup!.lang, detailGroup!.color);
           panelRef.current?.hide();
           canvas.style.cursor = "pointer";
         } else {
           if (hoveredIdxRef.current !== -1) { hoveredIdxRef.current = -1; needRender = true; }
-          tooltipRef.current?.hide();
+          hideTooltip();
           const oHit = hitOthers(mx, my);
           if (oHit >= 0) {
             const r = rectsRef.current[oHit];
@@ -680,18 +854,18 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
             hoveredGroupRef.current = r.groupIdx!;
             needRender = true;
           }
-          if (repo) tooltipRef.current?.show(e.clientX, e.clientY, repo, gi.lang, gi.color);
+          if (repo) showRepoTooltip(e.clientX, e.clientY, repo, gi.lang, gi.color);
           panelRef.current?.hide();
           canvas.style.cursor = "pointer";
         } else if (hdrHit >= 0) {
           if (hoveredIdxRef.current !== -1) { hoveredIdxRef.current = -1; needRender = true; }
           if (hoveredGroupRef.current !== hdrHit) { hoveredGroupRef.current = hdrHit; needRender = true; }
-          tooltipRef.current?.hide();
+          hideTooltip();
           panelRef.current?.hide();
           canvas.style.cursor = "pointer";
         } else {
           if (hoveredIdxRef.current !== -1) { hoveredIdxRef.current = -1; needRender = true; }
-          tooltipRef.current?.hide();
+          hideTooltip();
           const oHit = hitOthers(mx, my);
           if (oHit >= 0) {
             const r = rectsRef.current[oHit];
@@ -718,17 +892,17 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
 
       if (needRender) render();
     },
-    [mode, detailGroup, render]
+    [detailGroup, hideTooltip, mode, render, showRepoTooltip]
   );
 
   const onMouseLeave = useCallback(() => {
     hoveredIdxRef.current = -1;
     hoveredGroupRef.current = -1;
-    tooltipRef.current?.hide();
+    hideTooltip();
     panelRef.current?.hide();
     if (canvasRef.current) canvasRef.current.style.cursor = "default";
     render();
-  }, [render]);
+  }, [hideTooltip, render]);
 
   const onClick = useCallback(
     (e: React.MouseEvent) => {
@@ -799,7 +973,8 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
   );
 
   const breadcrumb =
-    mode === "overview"
+    breadcrumbOverride ??
+    (mode === "overview"
       ? [{ label: "All Languages" }]
       : tierLabel
         ? [
@@ -810,12 +985,13 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
         : [
             { label: "All Languages", href: "/" },
             { label: detailGroup!.lang, color: detailGroup!.color },
-          ];
+          ]);
 
   const info =
-    mode === "overview"
+    infoOverride ??
+    (mode === "overview"
       ? `${total.toLocaleString()} repos · ${groupRectsRef.current.length || groups?.length || 0} languages`
-      : `${detailGroup!.repos.length.toLocaleString()} ${detailGroup!.lang} repos`;
+      : `${detailGroup!.repos.length.toLocaleString()} ${detailGroup!.lang} repos`);
 
   const emptyMessage = search
     ? `No repositories match "${search}"`
@@ -832,6 +1008,7 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
         search={search}
         onSearchChange={setSearch}
         info={info}
+        metrics={metricOptions}
       />
       <div ref={wrapRef} className="flex-1 relative overflow-hidden">
         <canvas
@@ -841,6 +1018,13 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
           onClick={onClick}
           className="block w-full h-full"
         />
+        {fallbackActive && fallbackNotice && (
+          <div className="absolute left-4 top-4 z-10 max-w-md rounded-2xl border border-[#2b3e45] bg-[rgba(12,12,12,0.88)] px-4 py-3 shadow-2xl backdrop-blur-xl">
+            <div className="text-xs uppercase tracking-[0.22em] text-cyan-300/80">Fallback View</div>
+            <div className="mt-1 text-sm font-semibold text-white">{fallbackNotice.title}</div>
+            <div className="mt-1 text-xs leading-5 text-neutral-400">{fallbackNotice.detail}</div>
+          </div>
+        )}
         {!hasVisibleData && (
           <div className="absolute inset-0 flex items-center justify-center px-6 text-center pointer-events-none">
             <div className="max-w-md rounded-2xl border border-white/10 bg-black/40 px-5 py-4 backdrop-blur-md">

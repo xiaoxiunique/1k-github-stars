@@ -3,16 +3,23 @@
 import Link from "next/link";
 import type { Metric } from "@/lib/types";
 
+export interface HeaderBreadcrumbItem {
+  label: string;
+  href?: string;
+  color?: string;
+}
+
 interface HeaderProps {
-  breadcrumb?: { label: string; href?: string; color?: string }[];
+  breadcrumb?: HeaderBreadcrumbItem[];
   metric: Metric;
   onMetricChange: (m: Metric) => void;
   search: string;
   onSearchChange: (v: string) => void;
   info: string;
+  metrics?: { key: Metric; label: string }[];
 }
 
-const METRICS: { key: Metric; label: string }[] = [
+const DEFAULT_METRICS: { key: Metric; label: string }[] = [
   { key: "stars", label: "Stars" },
   { key: "growth", label: "30d Growth" },
   { key: "forks", label: "Forks" },
@@ -25,6 +32,7 @@ export function Header({
   search,
   onSearchChange,
   info,
+  metrics = DEFAULT_METRICS,
 }: HeaderProps) {
   return (
     <header className="flex items-center gap-3 px-5 py-2.5 bg-[#151515] border-b border-[#252525] shrink-0 z-10">
@@ -49,21 +57,23 @@ export function Header({
         ))}
       </nav>
 
-      <div className="flex gap-1 ml-3">
-        {METRICS.map((m) => (
-          <button
-            key={m.key}
-            onClick={() => onMetricChange(m.key)}
-            className={`px-3 py-1 rounded text-xs border transition-all cursor-pointer ${
-              metric === m.key
-                ? "bg-white text-black border-white"
-                : "border-[#252525] text-neutral-500 hover:border-neutral-600 hover:text-neutral-300"
-            }`}
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
+      {metrics.length > 0 && (
+        <div className="flex gap-1 ml-3">
+          {metrics.map((m) => (
+            <button
+              key={m.key}
+              onClick={() => onMetricChange(m.key)}
+              className={`px-3 py-1 rounded text-xs border transition-all cursor-pointer ${
+                metric === m.key
+                  ? "bg-white text-black border-white"
+                  : "border-[#252525] text-neutral-500 hover:border-neutral-600 hover:text-neutral-300"
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       <input
         type="text"
