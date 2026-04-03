@@ -48,7 +48,9 @@ interface TierFocus {
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 1.35;
-const WHEEL_ZOOM_FACTOR = 1.1;
+const ENTRY_SETTLE_ZOOM = 1.08;
+const WHEEL_ZOOM_SENSITIVITY = 0.0014;
+const SEMANTIC_WHEEL_THRESHOLD = 220;
 const DOUBLE_CLICK_ZOOM_FACTOR = 1.22;
 const DRAG_THRESHOLD = 4;
 const DEFAULT_CAMERA: Camera = { x: 0, y: 0, zoom: 1 };
@@ -138,6 +140,15 @@ export function Treemap({ groups, total, initialLang, initialTier }: TreemapProp
   const layoutBoundsRef = useRef<Rect>({ x: 0, y: 0, w: 0, h: 0 });
   const suppressClickRef = useRef(false);
   const animationRef = useRef<number | null>(null);
+  const animationResolveRef = useRef<(() => void) | null>(null);
+  const semanticTransitionRef = useRef(false);
+  const semanticWheelRef = useRef<{
+    direction: "in" | "out" | null;
+    amount: number;
+  }>({
+    direction: null,
+    amount: 0,
+  });
   const dragRef = useRef({
     active: false,
     startX: 0,
@@ -182,41 +193,12 @@ export function Treemap({ groups, total, initialLang, initialTier }: TreemapProp
     panelRef.current?.hide();
   }, []);
 
-  const enterLanguage = useCallback((lang: string) => {
-    resetHoverState();
-    setFocusLang(lang);
-    setFocusTier(null);
-    cameraRef.current = DEFAULT_CAMERA;
-    setCamera(DEFAULT_CAMERA);
-  }, [resetHoverState]);
-
-  const enterTier = useCallback((tier: TierFocus) => {
-    resetHoverState();
-    setFocusTier(tier);
-    cameraRef.current = DEFAULT_CAMERA;
-    setCamera(DEFAULT_CAMERA);
-  }, [resetHoverState]);
-
-  const exitFocusLevel = useCallback(() => {
-    if (focusTier) {
-      resetHoverState();
-      setFocusTier(null);
-      cameraRef.current = DEFAULT_CAMERA;
-      setCamera(DEFAULT_CAMERA);
-      return true;
-    }
-
-    if (focusLang) {
-      resetHoverState();
-      setFocusLang(null);
-      setFocusTier(null);
-      cameraRef.current = DEFAULT_CAMERA;
-      setCamera(DEFAULT_CAMERA);
-      return true;
-    }
-
-    return false;
-  }, [focusLang, focusTier, resetHoverState]);
+  const clearSemanticWheelIntent = useCallback(() => {
+    semanticWheelRef.current = {
+      direction: null,
+      amount: 0,
+    };
+  }, []);
 
   const clampCamera = useCallback((next: Camera): Camera => {
     const { width, height } = viewportRef.current;
@@ -253,47 +235,70 @@ export function Treemap({ groups, total, initialLang, initialTier }: TreemapProp
       cancelAnimationFrame(animationRef.current);
       animationRef.current = null;
     }
+
+    if (animationResolveRef.current) {
+      const resolve = animationResolveRef.current;
+      animationResolveRef.current = null;
+      resolve();
+    }
   }, []);
 
   const animateCameraTo = useCallback((target: Camera, duration = 240) => {
     stopCameraAnimation();
 
-    const start = cameraRef.current;
-    const end = clampCamera(target);
+    return new Promise<void>((resolve) => {
+      animationResolveRef.current = resolve;
 
-    if (
-      start.x === end.x &&
-      start.y === end.y &&
-      start.zoom === end.zoom
-    ) {
-      commitCamera(end, { clamp: false });
-      return;
-    }
+      const finish = () => {
+        if (animationResolveRef.current) {
+          const done = animationResolveRef.current;
+          animationResolveRef.current = null;
+          done();
+        }
+      };
 
-    const startedAt = performance.now();
-    const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+      const start = cameraRef.current;
+      const end = clampCamera(target);
 
-    const tick = (now: number) => {
-      const progress = Math.min(1, (now - startedAt) / duration);
-      const eased = easeOutCubic(progress);
-
-      commitCamera(
-        {
-          x: start.x + (end.x - start.x) * eased,
-          y: start.y + (end.y - start.y) * eased,
-          zoom: start.zoom + (end.zoom - start.zoom) * eased,
-        },
-        { clamp: false }
-      );
-
-      if (progress < 1) {
-        animationRef.current = requestAnimationFrame(tick);
-      } else {
-        animationRef.current = null;
+      if (
+        start.x === end.x &&
+        start.y === end.y &&
+        start.zoom === end.zoom
+      ) {
+        commitCamera(end, { clamp: false });
+        finish();
+        return;
       }
-    };
 
-    animationRef.current = requestAnimationFrame(tick);
+      const startedAt = performance.now();
+      const easeInOutCubic = (t: number) =>
+        t < 0.5
+          ? 4 * t * t * t
+          : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+      const tick = (now: number) => {
+        const progress = Math.min(1, (now - startedAt) / duration);
+        const eased = easeInOutCubic(progress);
+
+        commitCamera(
+          {
+            x: start.x + (end.x - start.x) * eased,
+            y: start.y + (end.y - start.y) * eased,
+            zoom: start.zoom + (end.zoom - start.zoom) * eased,
+          },
+          { clamp: false }
+        );
+
+        if (progress < 1) {
+          animationRef.current = requestAnimationFrame(tick);
+        } else {
+          animationRef.current = null;
+          finish();
+        }
+      };
+
+      animationRef.current = requestAnimationFrame(tick);
+    });
   }, [clampCamera, commitCamera, stopCameraAnimation]);
 
   const getCanvasPoint = useCallback((clientX: number, clientY: number) => {
@@ -328,9 +333,26 @@ export function Treemap({ groups, total, initialLang, initialTier }: TreemapProp
     commitCamera(target);
   }, [animateCameraTo, commitCamera, screenToWorld]);
 
-  const focusRect = useCallback((rect: Rect, maxZoom = MAX_ZOOM) => {
+  const waitForNextPaint = useCallback(() => {
+    return new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+  }, []);
+
+  const getCenteredCamera = useCallback((zoom = ENTRY_SETTLE_ZOOM): Camera => {
     const { width, height } = viewportRef.current;
-    if (!width || !height || !rect.w || !rect.h) return;
+    return {
+      zoom,
+      x: (width - width * zoom) / 2,
+      y: (height - height * zoom) / 2,
+    };
+  }, []);
+
+  const getCameraForRect = useCallback((rect: Rect, maxZoom = MAX_ZOOM): Camera | null => {
+    const { width, height } = viewportRef.current;
+    if (!width || !height || !rect.w || !rect.h) return null;
 
     const padding = Math.min(96, Math.max(36, Math.min(width, height) * 0.08));
     const zoom = Math.min(
@@ -341,12 +363,18 @@ export function Treemap({ groups, total, initialLang, initialTier }: TreemapProp
       )
     );
 
-    animateCameraTo({
+    return {
       zoom,
       x: width / 2 - (rect.x + rect.w / 2) * zoom,
       y: height / 2 - (rect.y + rect.h / 2) * zoom,
-    });
-  }, [animateCameraTo]);
+    };
+  }, []);
+
+  const focusRect = useCallback((rect: Rect, maxZoom = MAX_ZOOM) => {
+    const target = getCameraForRect(rect, maxZoom);
+    if (!target) return Promise.resolve();
+    return animateCameraTo(target);
+  }, [animateCameraTo, getCameraForRect]);
 
   // ── Compute layout ──
   const computeLayout = useCallback(() => {
@@ -1027,40 +1055,147 @@ export function Treemap({ groups, total, initialLang, initialTier }: TreemapProp
     return hitGroup(mx, my);
   }, []);
 
-  const enterNextSemanticLevel = useCallback((mx: number, my: number) => {
+  const enterNextSemanticLevel = useCallback(async (mx: number, my: number) => {
+    if (semanticTransitionRef.current) return false;
+
     const groupIndex = getSemanticGroupIndex(mx, my);
     if (groupIndex < 0) return false;
 
     const group = groupRectsRef.current[groupIndex];
     if (!group) return false;
 
-    if (viewLevel === "global") {
-      enterLanguage(group.lang);
+    semanticTransitionRef.current = true;
+    clearSemanticWheelIntent();
+    resetHoverState();
+
+    try {
+      const focusedCamera = getCameraForRect(group, MAX_ZOOM);
+      if (focusedCamera) {
+        await animateCameraTo(focusedCamera, 240);
+      }
+
+      if (viewLevel === "global") {
+        setFocusLang(group.lang);
+        setFocusTier(null);
+      } else if (viewLevel === "language") {
+        setFocusTier({
+          label: group.lang,
+          repos: group.allRepos,
+        });
+      } else {
+        return false;
+      }
+
+      await waitForNextPaint();
+      commitCamera(getCenteredCamera(), { clamp: false });
+      await waitForNextPaint();
+      await animateCameraTo(DEFAULT_CAMERA, 220);
       return true;
+    } finally {
+      semanticTransitionRef.current = false;
+    }
+  }, [
+    animateCameraTo,
+    clearSemanticWheelIntent,
+    commitCamera,
+    getCameraForRect,
+    getCenteredCamera,
+    getSemanticGroupIndex,
+    resetHoverState,
+    viewLevel,
+    waitForNextPaint,
+  ]);
+
+  const exitFocusLevel = useCallback(async () => {
+    if (semanticTransitionRef.current) return false;
+
+    const previousLang = focusLang;
+    const previousTier = focusTier;
+    if (!previousLang && !previousTier) return false;
+
+    semanticTransitionRef.current = true;
+    clearSemanticWheelIntent();
+    resetHoverState();
+
+    try {
+      if (previousTier) {
+        setFocusTier(null);
+        await waitForNextPaint();
+
+        const parentTierRect =
+          groupRectsRef.current.find((group) => group.lang === previousTier.label) ?? null;
+        const focusedCamera = parentTierRect ? getCameraForRect(parentTierRect, MAX_ZOOM) : null;
+
+        if (focusedCamera) {
+          commitCamera(focusedCamera, { clamp: false });
+          await waitForNextPaint();
+        }
+
+        await animateCameraTo(DEFAULT_CAMERA, 220);
+        return true;
+      }
+
+      if (previousLang) {
+        setFocusLang(null);
+        setFocusTier(null);
+        await waitForNextPaint();
+
+        const parentLangRect =
+          groupRectsRef.current.find(
+            (group) => group.lang.toLowerCase() === previousLang.toLowerCase()
+          ) ?? null;
+        const focusedCamera = parentLangRect ? getCameraForRect(parentLangRect, MAX_ZOOM) : null;
+
+        if (focusedCamera) {
+          commitCamera(focusedCamera, { clamp: false });
+          await waitForNextPaint();
+        }
+
+        await animateCameraTo(DEFAULT_CAMERA, 240);
+        return true;
+      }
+
+      return false;
+    } finally {
+      semanticTransitionRef.current = false;
+    }
+  }, [
+    animateCameraTo,
+    clearSemanticWheelIntent,
+    commitCamera,
+    focusLang,
+    focusTier,
+    getCameraForRect,
+    resetHoverState,
+    waitForNextPaint,
+  ]);
+
+  const shouldTriggerSemanticStep = useCallback((
+    direction: "in" | "out",
+    deltaAmount: number
+  ) => {
+    if (semanticWheelRef.current.direction !== direction) {
+      semanticWheelRef.current.direction = direction;
+      semanticWheelRef.current.amount = 0;
     }
 
-    if (viewLevel === "language") {
-      enterTier({
-        label: group.lang,
-        repos: group.allRepos,
-      });
-      return true;
-    }
-
-    return false;
-  }, [enterLanguage, enterTier, getSemanticGroupIndex, viewLevel]);
+    semanticWheelRef.current.amount += deltaAmount;
+    return semanticWheelRef.current.amount >= SEMANTIC_WHEEL_THRESHOLD;
+  }, []);
 
   const handleMetricChange = useCallback((nextMetric: Metric) => {
     setMetric(nextMetric);
     setFocusTier(null);
+    clearSemanticWheelIntent();
     cameraRef.current = DEFAULT_CAMERA;
     setCamera(DEFAULT_CAMERA);
     resetHoverState();
-  }, [resetHoverState]);
+  }, [clearSemanticWheelIntent, resetHoverState]);
 
   // ── Mouse events ──
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
+    if (semanticTransitionRef.current) return;
     stopCameraAnimation();
     dragRef.current = {
       active: true,
@@ -1080,28 +1215,52 @@ export function Treemap({ groups, total, initialLang, initialTier }: TreemapProp
 
   const onWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
+    if (semanticTransitionRef.current) return;
     const point = getCanvasPoint(e.clientX, e.clientY);
     if (!point) return;
     const world = screenToWorld(point.x, point.y);
     const currentZoom = cameraRef.current.zoom;
+    const zoomFactor = Math.exp(-e.deltaY * WHEEL_ZOOM_SENSITIVITY);
+    const nextZoom = currentZoom * zoomFactor;
+    const absDelta = Math.min(Math.abs(e.deltaY), SEMANTIC_WHEEL_THRESHOLD);
 
     if (e.deltaY < 0) {
-      if (currentZoom >= MAX_ZOOM - 0.02 && enterNextSemanticLevel(world.x, world.y)) {
+      if (currentZoom < MAX_ZOOM - 0.01) {
+        clearSemanticWheelIntent();
+        zoomAtPoint(point.x, point.y, nextZoom);
         return;
       }
-      zoomAtPoint(point.x, point.y, currentZoom * WHEEL_ZOOM_FACTOR);
+
+      if (shouldTriggerSemanticStep("in", absDelta)) {
+        clearSemanticWheelIntent();
+        void enterNextSemanticLevel(world.x, world.y);
+      }
       return;
     }
 
-    if (currentZoom <= MIN_ZOOM + 0.02 && exitFocusLevel()) {
+    if (currentZoom > MIN_ZOOM + 0.01) {
+      clearSemanticWheelIntent();
+      zoomAtPoint(point.x, point.y, nextZoom);
       return;
     }
 
-    zoomAtPoint(point.x, point.y, currentZoom / WHEEL_ZOOM_FACTOR);
-  }, [enterNextSemanticLevel, exitFocusLevel, getCanvasPoint, screenToWorld, zoomAtPoint]);
+    if (shouldTriggerSemanticStep("out", absDelta)) {
+      clearSemanticWheelIntent();
+      void exitFocusLevel();
+    }
+  }, [
+    clearSemanticWheelIntent,
+    enterNextSemanticLevel,
+    exitFocusLevel,
+    getCanvasPoint,
+    screenToWorld,
+    shouldTriggerSemanticStep,
+    zoomAtPoint,
+  ]);
 
   const onMouseMove = useCallback(
     (e: React.MouseEvent) => {
+      if (semanticTransitionRef.current) return;
       if (dragRef.current.active) return;
       const point = getCanvasPoint(e.clientX, e.clientY);
       if (!point) return;
@@ -1167,6 +1326,7 @@ export function Treemap({ groups, total, initialLang, initialTier }: TreemapProp
   );
 
   const onMouseLeave = useCallback(() => {
+    if (semanticTransitionRef.current) return;
     if (dragRef.current.active) return;
     hoveredIdxRef.current = -1;
     hoveredGroupRef.current = -1;
@@ -1178,6 +1338,7 @@ export function Treemap({ groups, total, initialLang, initialTier }: TreemapProp
 
   const onClick = useCallback(
     (e: React.MouseEvent) => {
+      if (semanticTransitionRef.current) return;
       if (suppressClickRef.current) {
         suppressClickRef.current = false;
         return;
@@ -1198,12 +1359,13 @@ export function Treemap({ groups, total, initialLang, initialTier }: TreemapProp
         return;
       }
 
-      enterNextSemanticLevel(mx, my);
+      void enterNextSemanticLevel(mx, my);
     },
     [enterNextSemanticLevel, getCanvasPoint, screenToWorld, viewLevel]
   );
 
   const onDoubleClick = useCallback((e: React.MouseEvent) => {
+    if (semanticTransitionRef.current) return;
     if (suppressClickRef.current) {
       suppressClickRef.current = false;
       return;
@@ -1213,7 +1375,9 @@ export function Treemap({ groups, total, initialLang, initialTier }: TreemapProp
     if (!point) return;
     const { x: mx, y: my } = screenToWorld(point.x, point.y);
 
-    if (viewLevel !== "tier" && enterNextSemanticLevel(mx, my)) {
+    const semanticGroup = getSemanticGroupIndex(mx, my);
+    if (viewLevel !== "tier" && semanticGroup >= 0) {
+      void enterNextSemanticLevel(mx, my);
       return;
     }
 
@@ -1229,13 +1393,12 @@ export function Treemap({ groups, total, initialLang, initialTier }: TreemapProp
       return;
     }
 
-    const groupIndex = getSemanticGroupIndex(mx, my);
-    if (groupIndex >= 0) {
-      focusRect(groupRectsRef.current[groupIndex], MAX_ZOOM);
+    if (semanticGroup >= 0) {
+      void focusRect(groupRectsRef.current[semanticGroup], MAX_ZOOM);
       return;
     }
 
-    zoomAtPoint(point.x, point.y, cameraRef.current.zoom * DOUBLE_CLICK_ZOOM_FACTOR, 160);
+    zoomAtPoint(point.x, point.y, cameraRef.current.zoom * DOUBLE_CLICK_ZOOM_FACTOR, 180);
   }, [enterNextSemanticLevel, focusRect, getCanvasPoint, getSemanticGroupIndex, screenToWorld, viewLevel, zoomAtPoint]);
 
   const breadcrumb =
