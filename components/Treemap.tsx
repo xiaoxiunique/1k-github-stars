@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { squarify } from "@/lib/squarify";
 import { lighten, darken, contrastText, fmtK } from "@/lib/colors";
 import { getRepoValue } from "@/lib/data";
@@ -35,6 +34,24 @@ type RepoLayoutItem = SquarifyRect & {
   repo: Repo | null;
   origIdx: number;
 };
+
+interface Camera {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+interface TierFocus {
+  label: string;
+  repos: Repo[];
+}
+
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 1.35;
+const WHEEL_ZOOM_FACTOR = 1.1;
+const DOUBLE_CLICK_ZOOM_FACTOR = 1.22;
+const DRAG_THRESHOLD = 4;
+const DEFAULT_CAMERA: Camera = { x: 0, y: 0, zoom: 1 };
 
 // Dynamic tier computation based on data range
 function computeDynamicTiers(
@@ -90,16 +107,13 @@ function forceEqualSplit(
 }
 
 interface TreemapProps {
-  mode: "overview" | "detail";
-  groups?: GroupData[];
-  detailGroup?: GroupData;
+  groups: GroupData[];
   total: number;
-  tierLabel?: string;
-  tierSlug?: string;
+  initialLang?: string;
+  initialTier?: TierFocus;
 }
 
-export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug }: TreemapProps) {
-  const router = useRouter();
+export function Treemap({ groups, total, initialLang, initialTier }: TreemapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<PanelHandle>(null);
@@ -108,17 +122,231 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
   const [metric, setMetric] = useState<Metric>("stars");
   const [search, setSearch] = useState("");
   const [hasVisibleData, setHasVisibleData] = useState(true);
+  const [visibleLanguageCount, setVisibleLanguageCount] = useState(groups.length);
+  const [camera, setCamera] = useState<Camera>(DEFAULT_CAMERA);
+  const [isPanning, setIsPanning] = useState(false);
+  const [focusLang, setFocusLang] = useState<string | null>(initialLang ?? null);
+  const [focusTier, setFocusTier] = useState<TierFocus | null>(initialTier ?? null);
 
   const rectsRef = useRef<RepoRect[]>([]);
   const groupRectsRef = useRef<GroupRect[]>([]);
   const hoveredIdxRef = useRef(-1);
   const hoveredGroupRef = useRef(-1);
   const allReposRef = useRef<Repo[]>([]); // for detail panel
+  const cameraRef = useRef<Camera>(DEFAULT_CAMERA);
+  const viewportRef = useRef({ width: 0, height: 0 });
+  const layoutBoundsRef = useRef<Rect>({ x: 0, y: 0, w: 0, h: 0 });
+  const suppressClickRef = useRef(false);
+  const animationRef = useRef<number | null>(null);
+  const dragRef = useRef({
+    active: false,
+    startX: 0,
+    startY: 0,
+    originX: 0,
+    originY: 0,
+    moved: false,
+  });
 
   const getVal = useCallback(
     (r: Repo) => getRepoValue(r, metric),
     [metric]
   );
+
+  const viewLevel = focusLang ? (focusTier ? "tier" : "language") : "global";
+  const activeGroup =
+    focusLang
+      ? groups.find((group) => group.lang.toLowerCase() === focusLang.toLowerCase()) ?? null
+      : null;
+  const activeTierGroup =
+    activeGroup && focusTier
+      ? {
+          lang: focusTier.label,
+          color: activeGroup.color,
+          count: focusTier.repos.length,
+          total: focusTier.repos.reduce((sum, repo) => sum + getVal(repo), 0),
+          repos: focusTier.repos,
+        }
+      : null;
+
+  useEffect(() => {
+    setFocusLang(initialLang ?? null);
+    setFocusTier(initialTier ?? null);
+    cameraRef.current = DEFAULT_CAMERA;
+    setCamera(DEFAULT_CAMERA);
+  }, [initialLang, initialTier]);
+
+  const resetHoverState = useCallback(() => {
+    hoveredIdxRef.current = -1;
+    hoveredGroupRef.current = -1;
+    tooltipRef.current?.hide();
+    panelRef.current?.hide();
+  }, []);
+
+  const enterLanguage = useCallback((lang: string) => {
+    resetHoverState();
+    setFocusLang(lang);
+    setFocusTier(null);
+    cameraRef.current = DEFAULT_CAMERA;
+    setCamera(DEFAULT_CAMERA);
+  }, [resetHoverState]);
+
+  const enterTier = useCallback((tier: TierFocus) => {
+    resetHoverState();
+    setFocusTier(tier);
+    cameraRef.current = DEFAULT_CAMERA;
+    setCamera(DEFAULT_CAMERA);
+  }, [resetHoverState]);
+
+  const exitFocusLevel = useCallback(() => {
+    if (focusTier) {
+      resetHoverState();
+      setFocusTier(null);
+      cameraRef.current = DEFAULT_CAMERA;
+      setCamera(DEFAULT_CAMERA);
+      return true;
+    }
+
+    if (focusLang) {
+      resetHoverState();
+      setFocusLang(null);
+      setFocusTier(null);
+      cameraRef.current = DEFAULT_CAMERA;
+      setCamera(DEFAULT_CAMERA);
+      return true;
+    }
+
+    return false;
+  }, [focusLang, focusTier, resetHoverState]);
+
+  const clampCamera = useCallback((next: Camera): Camera => {
+    const { width, height } = viewportRef.current;
+    const bounds = layoutBoundsRef.current;
+
+    if (!width || !height || !bounds.w || !bounds.h) return next;
+
+    const bleedX = Math.max(width * 0.35, 96);
+    const bleedY = Math.max(height * 0.35, 96);
+    const minX = width - (bounds.x + bounds.w) * next.zoom - bleedX;
+    const maxX = -bounds.x * next.zoom + bleedX;
+    const minY = height - (bounds.y + bounds.h) * next.zoom - bleedY;
+    const maxY = -bounds.y * next.zoom + bleedY;
+
+    return {
+      x: Math.min(maxX, Math.max(minX, next.x)),
+      y: Math.min(maxY, Math.max(minY, next.y)),
+      zoom: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next.zoom)),
+    };
+  }, []);
+
+  const commitCamera = useCallback((next: Camera, options?: { clamp?: boolean }) => {
+    const resolved = options?.clamp === false ? next : clampCamera(next);
+    cameraRef.current = resolved;
+    setCamera((prev) =>
+      prev.x === resolved.x && prev.y === resolved.y && prev.zoom === resolved.zoom
+        ? prev
+        : resolved
+    );
+  }, [clampCamera]);
+
+  const stopCameraAnimation = useCallback(() => {
+    if (animationRef.current !== null) {
+      cancelAnimationFrame(animationRef.current);
+      animationRef.current = null;
+    }
+  }, []);
+
+  const animateCameraTo = useCallback((target: Camera, duration = 240) => {
+    stopCameraAnimation();
+
+    const start = cameraRef.current;
+    const end = clampCamera(target);
+
+    if (
+      start.x === end.x &&
+      start.y === end.y &&
+      start.zoom === end.zoom
+    ) {
+      commitCamera(end, { clamp: false });
+      return;
+    }
+
+    const startedAt = performance.now();
+    const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = easeOutCubic(progress);
+
+      commitCamera(
+        {
+          x: start.x + (end.x - start.x) * eased,
+          y: start.y + (end.y - start.y) * eased,
+          zoom: start.zoom + (end.zoom - start.zoom) * eased,
+        },
+        { clamp: false }
+      );
+
+      if (progress < 1) {
+        animationRef.current = requestAnimationFrame(tick);
+      } else {
+        animationRef.current = null;
+      }
+    };
+
+    animationRef.current = requestAnimationFrame(tick);
+  }, [clampCamera, commitCamera, stopCameraAnimation]);
+
+  const getCanvasPoint = useCallback((clientX: number, clientY: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    return { x: clientX - rect.left, y: clientY - rect.top };
+  }, []);
+
+  const screenToWorld = useCallback((sx: number, sy: number, cam = cameraRef.current) => {
+    return {
+      x: (sx - cam.x) / cam.zoom,
+      y: (sy - cam.y) / cam.zoom,
+    };
+  }, []);
+
+  const zoomAtPoint = useCallback((sx: number, sy: number, nextZoom: number, duration = 0) => {
+    const current = cameraRef.current;
+    const clampedZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, nextZoom));
+    const anchor = screenToWorld(sx, sy, current);
+    const target = {
+      zoom: clampedZoom,
+      x: sx - anchor.x * clampedZoom,
+      y: sy - anchor.y * clampedZoom,
+    };
+
+    if (duration > 0) {
+      animateCameraTo(target, duration);
+      return;
+    }
+
+    commitCamera(target);
+  }, [animateCameraTo, commitCamera, screenToWorld]);
+
+  const focusRect = useCallback((rect: Rect, maxZoom = MAX_ZOOM) => {
+    const { width, height } = viewportRef.current;
+    if (!width || !height || !rect.w || !rect.h) return;
+
+    const padding = Math.min(96, Math.max(36, Math.min(width, height) * 0.08));
+    const zoom = Math.min(
+      maxZoom,
+      Math.max(
+        MIN_ZOOM,
+        Math.min((width - padding * 2) / rect.w, (height - padding * 2) / rect.h)
+      )
+    );
+
+    animateCameraTo({
+      zoom,
+      x: width / 2 - (rect.x + rect.w / 2) * zoom,
+      y: height / 2 - (rect.y + rect.h / 2) * zoom,
+    });
+  }, [animateCameraTo]);
 
   // ── Compute layout ──
   const computeLayout = useCallback(() => {
@@ -129,8 +357,9 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
     const W = canvas.width / dpr;
     const H = canvas.height / dpr;
     const query = search.toLowerCase();
+    layoutBoundsRef.current = { x: 0, y: 0, w: W, h: H };
 
-    if (mode === "overview" && groups) {
+    if (viewLevel === "global") {
       // Filter groups by search
       const filtered = groups
         .map((g) => {
@@ -144,6 +373,7 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
         .sort((a, b) => b.total - a.total);
 
       setHasVisibleData(filtered.length > 0);
+      setVisibleLanguageCount(filtered.length);
 
       const gItems: GroupLayoutItem[] = filtered.map((g) => ({
         val: g.total,
@@ -211,63 +441,69 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
       }
       groupRectsRef.current = newGroupRects;
       rectsRef.current = newRects;
-    } else if (mode === "detail" && detailGroup) {
+      return;
+    }
+
+    if (viewLevel === "language" && activeGroup) {
       const repos = query
-        ? detailGroup.repos.filter((r) =>
+        ? activeGroup.repos.filter((r) =>
             r.fullName.toLowerCase().includes(query)
           )
-        : detailGroup.repos;
+        : activeGroup.repos;
       const sorted = [...repos].sort((a, b) => getVal(b) - getVal(a));
       allReposRef.current = sorted;
       setHasVisibleData(sorted.some((repo) => getVal(repo) > 0));
 
-      // If few enough repos, show flat (no grouping needed)
-      const MAX_FLAT = 36;
-      if (sorted.length <= MAX_FLAT) {
-        // Flat layout — all repos as individual cells
-        const shown: RepoLayoutItem[] = sorted.map((r, idx) => ({ val: getVal(r), repo: r, origIdx: idx }));
-        squarify(shown, 0, 0, W, H);
-        const newRects: RepoRect[] = [];
-        for (const it of shown) {
-          if (it.rect) newRects.push({ ...it.rect, idx: it.origIdx });
-        }
-        rectsRef.current = newRects;
+      if (sorted.length === 0) {
+        rectsRef.current = [];
         groupRectsRef.current = [];
-      } else {
-        // Dynamic tier grouping based on actual data range
-        const maxVal = getVal(sorted[0]);
-        const minVal = getVal(sorted[sorted.length - 1]);
-        const tiers = computeDynamicTiers(minVal, maxVal, sorted, getVal);
+        return;
+      }
 
-        const tierGroups: TierGroup[] = [];
-        for (const tier of tiers) {
-          const tierRepos = sorted.filter((r) => {
-            const v = getVal(r);
-            return v >= tier.min && v < tier.max;
+      const maxVal = getVal(sorted[0]);
+      const minVal = getVal(sorted[sorted.length - 1]);
+      const tiers = computeDynamicTiers(minVal, maxVal, sorted, getVal);
+
+      const tierGroups: TierGroup[] = [];
+      for (const tier of tiers) {
+        const tierRepos = sorted.filter((r) => {
+          const v = getVal(r);
+          return v >= tier.min && v < tier.max;
+        });
+        if (tierRepos.length > 0) {
+          tierGroups.push({
+            label: tier.label,
+            repos: tierRepos,
+            total: tierRepos.reduce((s, r) => s + getVal(r), 0),
           });
-          if (tierRepos.length > 0) {
-            tierGroups.push({ label: tier.label, repos: tierRepos, total: tierRepos.reduce((s, r) => s + getVal(r), 0) });
-          }
         }
+      }
 
-        // If only 1 tier resulted (all repos in same range), bump up granularity
-        if (tierGroups.length <= 1 && sorted.length > MAX_FLAT) {
-          // Force split into ~5 equal-count groups
-          const chunkSize = Math.ceil(sorted.length / 5);
-          tierGroups.length = 0;
-          for (let i = 0; i < sorted.length; i += chunkSize) {
-            const chunk = sorted.slice(i, i + chunkSize);
-            const hi = getVal(chunk[0]);
-            const lo = getVal(chunk[chunk.length - 1]);
-            tierGroups.push({
-              label: `★ ${fmtK(lo)}–${fmtK(hi)}`,
-              repos: chunk,
-              total: chunk.reduce((s, r) => s + getVal(r), 0),
-            });
-          }
+      // Keep the semantic drill-down stable even for smaller languages.
+      if (tierGroups.length <= 1 && sorted.length > 1) {
+        const targetGroups = Math.min(5, sorted.length);
+        const chunkSize = Math.ceil(sorted.length / targetGroups);
+        tierGroups.length = 0;
+
+        for (let i = 0; i < sorted.length; i += chunkSize) {
+          const chunk = sorted.slice(i, i + chunkSize);
+          const hi = getVal(chunk[0]);
+          const lo = getVal(chunk[chunk.length - 1]);
+          tierGroups.push({
+            label: `★ ${fmtK(lo)}–${fmtK(hi)}`,
+            repos: chunk,
+            total: chunk.reduce((s, r) => s + getVal(r), 0),
+          });
         }
+      }
 
-      // Layout tier groups like overview groups
+      if (tierGroups.length === 0) {
+        rectsRef.current = [];
+        groupRectsRef.current = [];
+        setHasVisibleData(false);
+        return;
+      }
+
       const gItems: TierLayoutItem[] = tierGroups.map((g) => ({ val: g.total, group: g }));
       squarify(gItems, 0, 0, W, H);
 
@@ -277,7 +513,7 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
       for (const gi of gItems) {
         if (!gi.rect) continue;
         const g = gi.group;
-        const color = detailGroup.color;
+        const color = activeGroup.color;
         const GAP = 1.5;
         const HEADER_H = Math.min(22, Math.max(14, gi.rect.h * 0.06));
 
@@ -333,10 +569,67 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
 
       rectsRef.current = newRects;
       groupRectsRef.current = newGroupRects;
-      } // end else (grouped layout)
       allReposRef.current = sorted;
+      return;
     }
-  }, [mode, groups, detailGroup, metric, search, getVal]);
+
+    if (viewLevel === "tier" && activeGroup && activeTierGroup) {
+      const repos = query
+        ? activeTierGroup.repos.filter((r) =>
+            r.fullName.toLowerCase().includes(query)
+          )
+        : activeTierGroup.repos;
+      const sorted = repos
+        .filter((repo) => getVal(repo) > 0)
+        .sort((a, b) => getVal(b) - getVal(a));
+
+      allReposRef.current = sorted;
+      setHasVisibleData(sorted.length > 0);
+
+      if (sorted.length === 0) {
+        rectsRef.current = [];
+        groupRectsRef.current = [];
+        return;
+      }
+
+      const HEADER_H = 26;
+      const GAP = 1.5;
+      const totalValue = sorted.reduce((sum, repo) => sum + getVal(repo), 0);
+      const groupRect: GroupRect = {
+        x: 0,
+        y: 0,
+        w: W,
+        h: H,
+        lang: activeTierGroup.lang,
+        color: activeGroup.color,
+        count: sorted.length,
+        total: totalValue,
+        headerH: HEADER_H,
+        allRepos: sorted,
+      };
+
+      const items: RepoLayoutItem[] = sorted.map((repo, idx) => ({
+        val: getVal(repo),
+        repo,
+        origIdx: idx,
+      }));
+      squarify(items, GAP, HEADER_H + GAP, W - GAP * 2, H - HEADER_H - GAP * 2);
+
+      rectsRef.current = items
+        .filter((item) => item.rect)
+        .map((item) => ({
+          ...item.rect!,
+          idx: item.origIdx,
+          groupIdx: 0,
+        }));
+      groupRectsRef.current = [groupRect];
+      return;
+    }
+
+    rectsRef.current = [];
+    groupRectsRef.current = [];
+    setHasVisibleData(false);
+  }, [activeGroup, activeTierGroup, getVal, groups, search, viewLevel]);
 
   // ── Render ──
   const render = useCallback(() => {
@@ -350,13 +643,57 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
     const gRects = groupRectsRef.current;
     const hovIdx = hoveredIdxRef.current;
     const hovG = hoveredGroupRef.current;
+    const cam = cameraRef.current;
 
     ctx.save();
     ctx.scale(dpr, dpr);
-    ctx.fillStyle = "#0c0c0c";
+    ctx.fillStyle = "#050608";
     ctx.fillRect(0, 0, W, H);
 
-    if (mode === "overview") {
+    const coarseGrid = 160 * cam.zoom;
+    const fineGrid = 40 * cam.zoom;
+
+    if (fineGrid >= 22) {
+      ctx.strokeStyle = "rgba(255,255,255,0.025)";
+      ctx.lineWidth = 1;
+      const startX = ((cam.x % fineGrid) + fineGrid) % fineGrid;
+      const startY = ((cam.y % fineGrid) + fineGrid) % fineGrid;
+      for (let x = startX; x < W; x += fineGrid) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, H);
+        ctx.stroke();
+      }
+      for (let y = startY; y < H; y += fineGrid) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(W, y);
+        ctx.stroke();
+      }
+    }
+
+    ctx.strokeStyle = "rgba(97,218,251,0.04)";
+    ctx.lineWidth = 1;
+    const coarseStartX = ((cam.x % coarseGrid) + coarseGrid) % coarseGrid;
+    const coarseStartY = ((cam.y % coarseGrid) + coarseGrid) % coarseGrid;
+    for (let x = coarseStartX; x < W; x += coarseGrid) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, H);
+      ctx.stroke();
+    }
+    for (let y = coarseStartY; y < H; y += coarseGrid) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(W, y);
+      ctx.stroke();
+    }
+
+    ctx.save();
+    ctx.translate(cam.x, cam.y);
+    ctx.scale(cam.zoom, cam.zoom);
+
+    if (viewLevel === "global") {
       // Group backgrounds
       for (let gi = 0; gi < gRects.length; gi++) {
         const g = gRects[gi];
@@ -553,7 +890,17 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
     }
 
     ctx.restore();
-  }, [mode, detailGroup]);
+
+    const vignette = ctx.createLinearGradient(0, 0, 0, H);
+    vignette.addColorStop(0, "rgba(0,0,0,0.18)");
+    vignette.addColorStop(0.14, "rgba(0,0,0,0)");
+    vignette.addColorStop(0.86, "rgba(0,0,0,0)");
+    vignette.addColorStop(1, "rgba(0,0,0,0.24)");
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.restore();
+  }, [viewLevel]);
 
   // ── Resize ──
   const resize = useCallback(() => {
@@ -561,13 +908,18 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
     const wrap = wrapRef.current;
     if (!canvas || !wrap) return;
     const dpr = devicePixelRatio || 1;
+    viewportRef.current = {
+      width: wrap.clientWidth,
+      height: wrap.clientHeight,
+    };
     canvas.width = wrap.clientWidth * dpr;
     canvas.height = wrap.clientHeight * dpr;
     canvas.style.width = wrap.clientWidth + "px";
     canvas.style.height = wrap.clientHeight + "px";
     computeLayout();
+    commitCamera(cameraRef.current);
     render();
-  }, [computeLayout, render]);
+  }, [commitCamera, computeLayout, render]);
 
   useEffect(() => {
     resize();
@@ -578,8 +930,55 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
 
   useEffect(() => {
     computeLayout();
+    commitCamera(cameraRef.current);
     render();
-  }, [computeLayout, render]);
+  }, [commitCamera, computeLayout, render]);
+
+  useEffect(() => {
+    cameraRef.current = camera;
+    render();
+  }, [camera, render]);
+
+  useEffect(() => {
+    const onWindowMouseMove = (event: MouseEvent) => {
+      const drag = dragRef.current;
+      if (!drag.active) return;
+
+      const dx = event.clientX - drag.startX;
+      const dy = event.clientY - drag.startY;
+
+      if (!drag.moved && Math.hypot(dx, dy) >= DRAG_THRESHOLD) {
+        drag.moved = true;
+      }
+
+      if (!drag.moved) return;
+
+      commitCamera({
+        x: drag.originX + dx,
+        y: drag.originY + dy,
+        zoom: cameraRef.current.zoom,
+      });
+    };
+
+    const onWindowMouseUp = () => {
+      if (!dragRef.current.active) return;
+      suppressClickRef.current = dragRef.current.moved;
+      dragRef.current.active = false;
+      setIsPanning(false);
+    };
+
+    window.addEventListener("mousemove", onWindowMouseMove);
+    window.addEventListener("mouseup", onWindowMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", onWindowMouseMove);
+      window.removeEventListener("mouseup", onWindowMouseUp);
+    };
+  }, [commitCamera]);
+
+  useEffect(() => {
+    return () => stopCameraAnimation();
+  }, [stopCameraAnimation]);
 
   // ── Hit tests ──
   const hitRepo = (mx: number, my: number) => {
@@ -615,113 +1014,160 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
     return -1;
   };
 
+  const getSemanticGroupIndex = useCallback((mx: number, my: number) => {
+    const repoHit = hitRepo(mx, my);
+    if (repoHit >= 0) return rectsRef.current[repoHit].groupIdx ?? -1;
+
+    const othersHit = hitOthers(mx, my);
+    if (othersHit >= 0) return rectsRef.current[othersHit].groupIdx ?? -1;
+
+    const headerHit = hitHeader(mx, my);
+    if (headerHit >= 0) return headerHit;
+
+    return hitGroup(mx, my);
+  }, []);
+
+  const enterNextSemanticLevel = useCallback((mx: number, my: number) => {
+    const groupIndex = getSemanticGroupIndex(mx, my);
+    if (groupIndex < 0) return false;
+
+    const group = groupRectsRef.current[groupIndex];
+    if (!group) return false;
+
+    if (viewLevel === "global") {
+      enterLanguage(group.lang);
+      return true;
+    }
+
+    if (viewLevel === "language") {
+      enterTier({
+        label: group.lang,
+        repos: group.allRepos,
+      });
+      return true;
+    }
+
+    return false;
+  }, [enterLanguage, enterTier, getSemanticGroupIndex, viewLevel]);
+
+  const handleMetricChange = useCallback((nextMetric: Metric) => {
+    setMetric(nextMetric);
+    setFocusTier(null);
+    cameraRef.current = DEFAULT_CAMERA;
+    setCamera(DEFAULT_CAMERA);
+    resetHoverState();
+  }, [resetHoverState]);
+
   // ── Mouse events ──
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    stopCameraAnimation();
+    dragRef.current = {
+      active: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      originX: cameraRef.current.x,
+      originY: cameraRef.current.y,
+      moved: false,
+    };
+    hoveredIdxRef.current = -1;
+    hoveredGroupRef.current = -1;
+    tooltipRef.current?.hide();
+    panelRef.current?.hide();
+    setIsPanning(true);
+    render();
+  }, [render, stopCameraAnimation]);
+
+  const onWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault();
+    const point = getCanvasPoint(e.clientX, e.clientY);
+    if (!point) return;
+    const world = screenToWorld(point.x, point.y);
+    const currentZoom = cameraRef.current.zoom;
+
+    if (e.deltaY < 0) {
+      if (currentZoom >= MAX_ZOOM - 0.02 && enterNextSemanticLevel(world.x, world.y)) {
+        return;
+      }
+      zoomAtPoint(point.x, point.y, currentZoom * WHEEL_ZOOM_FACTOR);
+      return;
+    }
+
+    if (currentZoom <= MIN_ZOOM + 0.02 && exitFocusLevel()) {
+      return;
+    }
+
+    zoomAtPoint(point.x, point.y, currentZoom / WHEEL_ZOOM_FACTOR);
+  }, [enterNextSemanticLevel, exitFocusLevel, getCanvasPoint, screenToWorld, zoomAtPoint]);
+
   const onMouseMove = useCallback(
     (e: React.MouseEvent) => {
+      if (dragRef.current.active) return;
+      const point = getCanvasPoint(e.clientX, e.clientY);
+      if (!point) return;
+      const { x: mx, y: my } = screenToWorld(point.x, point.y);
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
       const gRects = groupRectsRef.current;
+      const semanticCursor = viewLevel === "tier" ? "default" : "zoom-in";
 
       let needRender = false;
 
-      if (mode === "detail") {
-        // Detail view uses same group-based layout now
-        const repoHit = hitRepo(mx, my);
-        if (repoHit >= 0) {
-          const r = rectsRef.current[repoHit];
-          const gi = gRects[r.groupIdx!];
-          const repo = gi?.allRepos[r.idx];
-          if (hoveredIdxRef.current !== r.idx || hoveredGroupRef.current !== r.groupIdx!) {
-            hoveredIdxRef.current = r.idx;
-            hoveredGroupRef.current = r.groupIdx!;
-            needRender = true;
-          }
-          if (repo) tooltipRef.current?.show(e.clientX, e.clientY, repo, detailGroup!.lang, detailGroup!.color);
-          panelRef.current?.hide();
-          canvas.style.cursor = "pointer";
-        } else {
-          if (hoveredIdxRef.current !== -1) { hoveredIdxRef.current = -1; needRender = true; }
-          tooltipRef.current?.hide();
-          const oHit = hitOthers(mx, my);
-          if (oHit >= 0) {
-            const r = rectsRef.current[oHit];
-            const gi = gRects[r.groupIdx!];
-            if (hoveredGroupRef.current !== r.groupIdx!) { hoveredGroupRef.current = r.groupIdx!; needRender = true; }
-            const TOP_N = 6, SMALL_MAX = 30;
-            const skipCount = Math.min(gi.allRepos.length, TOP_N + SMALL_MAX);
-            const hidden = gi.allRepos.slice(skipCount);
-            panelRef.current?.show(e.clientX, e.clientY, {
-              title: `${gi.lang} — more repos`,
-              subtitle: `${hidden.length.toLocaleString()} repos not shown`,
-              color: gi.color,
-              repos: hidden,
-              startRank: skipCount + 1,
-            });
-            canvas.style.cursor = "pointer";
-          } else {
-            if (hoveredGroupRef.current !== -1) { hoveredGroupRef.current = -1; needRender = true; }
-            panelRef.current?.hide();
-            canvas.style.cursor = "default";
-          }
+      const repoHit = hitRepo(mx, my);
+      if (repoHit >= 0) {
+        const r = rectsRef.current[repoHit];
+        const gi = gRects[r.groupIdx ?? 0];
+        const repo = gi?.allRepos[r.idx];
+        if (hoveredIdxRef.current !== r.idx || hoveredGroupRef.current !== (r.groupIdx ?? 0)) {
+          hoveredIdxRef.current = r.idx;
+          hoveredGroupRef.current = r.groupIdx ?? 0;
+          needRender = true;
         }
+        if (repo) {
+          tooltipRef.current?.show(
+            e.clientX,
+            e.clientY,
+            repo,
+            activeGroup?.lang ?? gi.lang,
+            activeGroup?.color ?? gi.color
+          );
+        }
+        panelRef.current?.hide();
+        canvas.style.cursor = viewLevel === "tier" ? "pointer" : semanticCursor;
       } else {
-        const hdrHit = hitHeader(mx, my);
-        const repoHit = hdrHit < 0 ? hitRepo(mx, my) : -1;
-
-        if (repoHit >= 0) {
-          const r = rectsRef.current[repoHit];
+        if (hoveredIdxRef.current !== -1) { hoveredIdxRef.current = -1; needRender = true; }
+        tooltipRef.current?.hide();
+        const oHit = hitOthers(mx, my);
+        if (oHit >= 0) {
+          const r = rectsRef.current[oHit];
           const gi = gRects[r.groupIdx!];
-          const repo = gi?.allRepos[r.idx];
-          if (hoveredIdxRef.current !== r.idx || hoveredGroupRef.current !== r.groupIdx!) {
-            hoveredIdxRef.current = r.idx;
-            hoveredGroupRef.current = r.groupIdx!;
-            needRender = true;
-          }
-          if (repo) tooltipRef.current?.show(e.clientX, e.clientY, repo, gi.lang, gi.color);
-          panelRef.current?.hide();
-          canvas.style.cursor = "pointer";
-        } else if (hdrHit >= 0) {
-          if (hoveredIdxRef.current !== -1) { hoveredIdxRef.current = -1; needRender = true; }
-          if (hoveredGroupRef.current !== hdrHit) { hoveredGroupRef.current = hdrHit; needRender = true; }
-          tooltipRef.current?.hide();
-          panelRef.current?.hide();
-          canvas.style.cursor = "pointer";
+          if (hoveredGroupRef.current !== r.groupIdx!) { hoveredGroupRef.current = r.groupIdx!; needRender = true; }
+          const TOP_N = 6, SMALL_MAX = 30;
+          const skipCount = Math.min(gi.allRepos.length, TOP_N + SMALL_MAX);
+          const hidden = gi.allRepos.slice(skipCount);
+          panelRef.current?.show(e.clientX, e.clientY, {
+            title: `${gi.lang} — more repos`,
+            subtitle: `${hidden.length.toLocaleString()} repos not shown`,
+            color: gi.color,
+            repos: hidden,
+            startRank: skipCount + 1,
+          });
+          canvas.style.cursor = semanticCursor;
         } else {
-          if (hoveredIdxRef.current !== -1) { hoveredIdxRef.current = -1; needRender = true; }
-          tooltipRef.current?.hide();
-          const oHit = hitOthers(mx, my);
-          if (oHit >= 0) {
-            const r = rectsRef.current[oHit];
-            const gi = gRects[r.groupIdx!];
-            if (hoveredGroupRef.current !== r.groupIdx!) { hoveredGroupRef.current = r.groupIdx!; needRender = true; }
-            const TOP_N = 6, SMALL_MAX = 30;
-            const skipCount = Math.min(gi.allRepos.length, TOP_N + SMALL_MAX);
-            const hidden = gi.allRepos.slice(skipCount);
-            panelRef.current?.show(e.clientX, e.clientY, {
-              title: `${gi.lang} — more repos`,
-              subtitle: `${hidden.length.toLocaleString()} repos not shown`,
-              color: gi.color,
-              repos: hidden,
-              startRank: skipCount + 1,
-            });
-            canvas.style.cursor = "pointer";
-          } else {
-            if (hoveredGroupRef.current !== -1) { hoveredGroupRef.current = -1; needRender = true; }
-            panelRef.current?.hide();
-            canvas.style.cursor = "default";
-          }
+          const semanticGroup = getSemanticGroupIndex(mx, my);
+          if (hoveredGroupRef.current !== semanticGroup) { hoveredGroupRef.current = semanticGroup; needRender = true; }
+          panelRef.current?.hide();
+          canvas.style.cursor = semanticGroup >= 0 ? semanticCursor : "default";
         }
       }
 
       if (needRender) render();
     },
-    [mode, detailGroup, render]
+    [activeGroup, getCanvasPoint, getSemanticGroupIndex, render, screenToWorld, viewLevel]
   );
 
   const onMouseLeave = useCallback(() => {
+    if (dragRef.current.active) return;
     hoveredIdxRef.current = -1;
     hoveredGroupRef.current = -1;
     tooltipRef.current?.hide();
@@ -732,103 +1178,105 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
 
   const onClick = useCallback(
     (e: React.MouseEvent) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
+      if (suppressClickRef.current) {
+        suppressClickRef.current = false;
+        return;
+      }
 
-      if (mode === "detail") {
-        // Header click → navigate to sub-tier
-        const hdrHit = hitHeader(mx, my);
-        if (hdrHit >= 0) {
-          const g = groupRectsRef.current[hdrHit];
-          // g.lang is the tier label like "★ 5k–10k", extract slug from allRepos range
-          if (g.allRepos.length > 36) {
-            const maxVal = Math.max(...g.allRepos.map(r => r.stars));
-            const minVal = Math.min(...g.allRepos.map(r => r.stars));
-            const slug = `${minVal}-${maxVal + 1}`;
-            router.push(`/${encodeURIComponent(detailGroup!.lang.toLowerCase())}/${slug}`);
-          }
-          return;
-        }
-        // Repo click → open GitHub
+      const point = getCanvasPoint(e.clientX, e.clientY);
+      if (!point) return;
+      const { x: mx, y: my } = screenToWorld(point.x, point.y);
+
+      if (viewLevel === "tier") {
         const hit = hitRepo(mx, my);
         if (hit >= 0) {
           const r = rectsRef.current[hit];
-          const gi = groupRectsRef.current[r.groupIdx!];
+          const gi = groupRectsRef.current[r.groupIdx ?? 0];
           const repo = gi?.allRepos[r.idx];
           if (repo) window.open(`https://github.com/${repo.fullName}`, "_blank");
-          return;
         }
-        // "More" click → navigate to sub-tier
-        const oHit = hitOthers(mx, my);
-        if (oHit >= 0) {
-          const r = rectsRef.current[oHit];
-          const gi = groupRectsRef.current[r.groupIdx!];
-          if (gi.allRepos.length > 36) {
-            const maxVal = Math.max(...gi.allRepos.map(r => r.stars));
-            const minVal = Math.min(...gi.allRepos.map(r => r.stars));
-            const slug = `${minVal}-${maxVal + 1}`;
-            router.push(`/${encodeURIComponent(detailGroup!.lang.toLowerCase())}/${slug}`);
-          }
-        }
-      } else {
-        const hdrHit = hitHeader(mx, my);
-        if (hdrHit >= 0) {
-          const g = groupRectsRef.current[hdrHit];
-          router.push(`/${encodeURIComponent(g.lang.toLowerCase())}`);
-          return;
-        }
-        const repoHit = hitRepo(mx, my);
-        if (repoHit >= 0) {
-          const r = rectsRef.current[repoHit];
-          const gi = groupRectsRef.current[r.groupIdx!];
-          const repo = gi?.allRepos[r.idx];
-          if (repo) window.open(`https://github.com/${repo.fullName}`, "_blank");
-          return;
-        }
-        const gh = hitGroup(mx, my);
-        if (gh >= 0) {
-          const g = groupRectsRef.current[gh];
-          router.push(`/${encodeURIComponent(g.lang.toLowerCase())}`);
-        }
+        return;
       }
+
+      enterNextSemanticLevel(mx, my);
     },
-    [mode, router]
+    [enterNextSemanticLevel, getCanvasPoint, screenToWorld, viewLevel]
   );
 
+  const onDoubleClick = useCallback((e: React.MouseEvent) => {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return;
+    }
+
+    const point = getCanvasPoint(e.clientX, e.clientY);
+    if (!point) return;
+    const { x: mx, y: my } = screenToWorld(point.x, point.y);
+
+    if (viewLevel !== "tier" && enterNextSemanticLevel(mx, my)) {
+      return;
+    }
+
+    const repoHit = hitRepo(mx, my);
+    if (repoHit >= 0) {
+      focusRect(rectsRef.current[repoHit], MAX_ZOOM);
+      return;
+    }
+
+    const othersHit = hitOthers(mx, my);
+    if (othersHit >= 0) {
+      focusRect(rectsRef.current[othersHit], MAX_ZOOM);
+      return;
+    }
+
+    const groupIndex = getSemanticGroupIndex(mx, my);
+    if (groupIndex >= 0) {
+      focusRect(groupRectsRef.current[groupIndex], MAX_ZOOM);
+      return;
+    }
+
+    zoomAtPoint(point.x, point.y, cameraRef.current.zoom * DOUBLE_CLICK_ZOOM_FACTOR, 160);
+  }, [enterNextSemanticLevel, focusRect, getCanvasPoint, getSemanticGroupIndex, screenToWorld, viewLevel, zoomAtPoint]);
+
   const breadcrumb =
-    mode === "overview"
+    viewLevel === "global"
       ? [{ label: "All Languages" }]
-      : tierLabel
+      : viewLevel === "language" && activeGroup
         ? [
             { label: "All Languages", href: "/" },
-            { label: detailGroup!.lang, href: `/${encodeURIComponent(detailGroup!.lang.toLowerCase())}`, color: detailGroup!.color },
-            { label: tierLabel },
+            { label: activeGroup.lang, color: activeGroup.color },
           ]
-        : [
-            { label: "All Languages", href: "/" },
-            { label: detailGroup!.lang, color: detailGroup!.color },
-          ];
+        : activeGroup && activeTierGroup
+          ? [
+              { label: "All Languages", href: "/" },
+              { label: activeGroup.lang, href: `/${encodeURIComponent(activeGroup.lang.toLowerCase())}`, color: activeGroup.color },
+              { label: activeTierGroup.lang },
+            ]
+          : [{ label: "All Languages" }];
 
   const info =
-    mode === "overview"
-      ? `${total.toLocaleString()} repos · ${groupRectsRef.current.length || groups?.length || 0} languages`
-      : `${detailGroup!.repos.length.toLocaleString()} ${detailGroup!.lang} repos`;
+    viewLevel === "global"
+      ? `${total.toLocaleString()} repos · ${visibleLanguageCount} languages`
+      : viewLevel === "language" && activeGroup
+        ? `${activeGroup.repos.length.toLocaleString()} ${activeGroup.lang} repos`
+        : activeTierGroup
+          ? `${activeTierGroup.count.toLocaleString()} repos · ${activeTierGroup.lang}`
+          : `${total.toLocaleString()} repos`;
 
   const emptyMessage = search
     ? `No repositories match "${search}"`
     : metric === "growth"
       ? "No positive 30d growth data in the current dataset"
       : "No repositories available for this view";
+  const hasCustomCamera =
+    Math.abs(camera.x) > 1 || Math.abs(camera.y) > 1 || Math.abs(camera.zoom - 1) > 0.01;
 
   return (
     <>
       <Header
         breadcrumb={breadcrumb}
         metric={metric}
-        onMetricChange={setMetric}
+        onMetricChange={handleMetricChange}
         search={search}
         onSearchChange={setSearch}
         info={info}
@@ -836,10 +1284,14 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
       <div ref={wrapRef} className="flex-1 relative overflow-hidden">
         <canvas
           ref={canvasRef}
+          onMouseDown={onMouseDown}
           onMouseMove={onMouseMove}
           onMouseLeave={onMouseLeave}
+          onWheel={onWheel}
           onClick={onClick}
-          className="block w-full h-full"
+          onDoubleClick={onDoubleClick}
+          className="block w-full h-full touch-none"
+          style={{ cursor: isPanning ? "grabbing" : undefined }}
         />
         {!hasVisibleData && (
           <div className="absolute inset-0 flex items-center justify-center px-6 text-center pointer-events-none">
@@ -853,6 +1305,27 @@ export function Treemap({ mode, groups, detailGroup, total, tierLabel, tierSlug 
             </div>
           </div>
         )}
+        <div className="absolute left-5 bottom-5 pointer-events-none">
+          <div className="rounded-2xl border border-white/10 bg-black/45 px-4 py-3 shadow-2xl backdrop-blur-xl">
+            <div className="text-[11px] uppercase tracking-[0.22em] text-cyan-300/75">Atlas Mode</div>
+            <div className="mt-2 text-sm text-white/90">
+              Scroll in to drill down, scroll out to step back, drag to pan.
+            </div>
+          </div>
+        </div>
+        <div className="absolute right-5 bottom-5 flex items-center gap-2">
+          <div className="rounded-full border border-white/10 bg-black/45 px-3 py-2 text-xs text-white/80 shadow-xl backdrop-blur-xl">
+            Zoom {Math.round(camera.zoom * 100)}%
+          </div>
+          <button
+            type="button"
+            onClick={() => animateCameraTo(DEFAULT_CAMERA)}
+            disabled={!hasCustomCamera}
+            className="rounded-full border border-white/10 bg-white/8 px-4 py-2 text-xs font-medium text-white shadow-xl backdrop-blur-xl transition hover:bg-white/14 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Reset View
+          </button>
+        </div>
       </div>
       <Panel ref={panelRef} />
       <Tooltip ref={tooltipRef} />

@@ -7,7 +7,7 @@ export default function Home() {
 
   return (
     <main className="flex flex-col h-screen bg-[#0c0c0c] text-white overflow-hidden">
-      <Treemap mode="overview" groups={groups} total={total} />
+      <Treemap groups={groups} total={total} />
     </main>
   );
 }
