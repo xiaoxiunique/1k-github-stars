@@ -23,11 +23,7 @@ export default async function LangPage({
 
   return (
     <main className="flex flex-col h-screen bg-[#0c0c0c] text-white overflow-hidden">
-      <Treemap
-        groups={groups}
-        total={total}
-        initialLang={group.lang}
-      />
+      <Treemap mode="detail" detailGroup={group} total={total} />
     </main>
   );
 }

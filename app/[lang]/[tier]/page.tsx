@@ -60,13 +60,11 @@ export default async function TierPage({
   return (
     <main className="flex flex-col h-screen bg-[#0c0c0c] text-white overflow-hidden">
       <Treemap
-        groups={groups}
+        mode="detail"
+        detailGroup={tierGroup}
         total={total}
-        initialLang={group.lang}
-        initialTier={{
-          label: tierLabel,
-          repos: tierGroup.repos,
-        }}
+        tierLabel={tierLabel}
+        tierSlug={tierSlug}
       />
     </main>
   );
