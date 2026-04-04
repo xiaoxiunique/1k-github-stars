@@ -16,6 +16,8 @@
 # next.js
 /.next/
 /out/
+.open-next/
+cloudflare-env.d.ts
 
 # production
 /build
@@ -41,3 +43,5 @@ excalidraw.log
 *.tsbuildinfo
 next-env.d.ts
 .gstack/
+.omx/
+.wrangler/

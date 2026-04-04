@@ -1,24 +1,21 @@
 import type { RepoData, Repo, GroupData, Metric } from "./types";
 import { getRepoValue } from "./metrics";
+import { shouldExcludeRepo } from "./repo-classifier";
 import rawData from "@/data/repos.json";
 
 const data = rawData as RepoData;
 export const DAILY_TRENDING_MIN_REPO_AGE_DAYS = 7;
 export const DAILY_TRENDING_MIN_BASELINE_STARS = 2500;
-const repoMetaIndex = new Map(
-  data.repos
-    .filter((row) => row[6] || row[7])
-    .map((row) => [
-      row[0],
-      {
-        createdAt: row[6],
-        updatedAt: row[7],
-      },
-    ])
-);
-
-export function getAllRepos(): Repo[] {
-  return data.repos.map((r) => ({
+const filteredRows = data.repos.filter((row) => {
+  const langName = data.langs[row[3]] || "Other";
+  return !shouldExcludeRepo(row[0], row[4] ?? "", langName);
+});
+const curatedRows = data.repos.filter((row) => {
+  const langName = data.langs[row[3]] || "Other";
+  return shouldExcludeRepo(row[0], row[4] ?? "", langName);
+});
+function mapRowsToRepos(rows: RepoData["repos"]): Repo[] {
+  return rows.map((r) => ({
     fullName: r[0],
     stars: r[1],
     forks: r[2],
@@ -26,6 +23,14 @@ export function getAllRepos(): Repo[] {
     description: r[4],
     growth: r[5],
   }));
+}
+
+export function getAllRepos(): Repo[] {
+  return mapRowsToRepos(filteredRows);
+}
+
+export function getCuratedRepos(): Repo[] {
+  return mapRowsToRepos(curatedRows);
 }
 
 export function getLangs(): string[] {
@@ -37,15 +42,15 @@ export function getColors(): string[] {
 }
 
 export function getTotal(): number {
-  return data.total;
+  return filteredRows.length;
+}
+
+export function getCuratedTotal(): number {
+  return curatedRows.length;
 }
 
 export function getExportedAt(): string {
   return data.exported;
-}
-
-export function getRepoSnapshotMeta(fullName: string) {
-  return repoMetaIndex.get(fullName) ?? null;
 }
 
 function groupRepos(repos: Repo[], metric: Metric = "stars"): GroupData[] {
@@ -83,12 +88,16 @@ export function getGroups(metric: Metric = "stars"): GroupData[] {
   return groupRepos(getAllRepos(), metric);
 }
 
+export function getCuratedGroups(metric: Metric = "stars"): GroupData[] {
+  return groupRepos(getCuratedRepos(), metric);
+}
+
 export function getDailyTrendingData() {
   const exportedAtMs = new Date(data.exported).getTime();
   const eligibleRepos: Repo[] = [];
   let positiveGrowthRepoCount = 0;
 
-  for (const row of data.repos) {
+  for (const row of filteredRows) {
     const growth = row[5] ?? 0;
     const baselineStars = row[1] - growth;
     const createdAt = row[6];

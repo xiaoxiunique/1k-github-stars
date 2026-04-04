@@ -47,6 +47,21 @@ type ActiveTooltip = {
   langColor: string;
 };
 
+type RepoMetaIndex = Record<string, [string | null, string | null]>;
+
+function matchesRepoSearch(repo: Repo, query: string, langName: string) {
+  if (!query) return true;
+
+  const normalizedLang = langName.toLowerCase();
+  const normalizedDescription = repo.description.toLowerCase();
+
+  return (
+    repo.fullName.toLowerCase().includes(query) ||
+    normalizedDescription.includes(query) ||
+    normalizedLang.includes(query)
+  );
+}
+
 // Dynamic tier computation based on data range
 function computeDynamicTiers(
   minVal: number,
@@ -156,7 +171,7 @@ export function Treemap({
   const allReposRef = useRef<Repo[]>([]); // for detail panel
   const activeMetricRef = useRef<Metric>(initialMetric);
   const tooltipMetaCacheRef = useRef<Map<string, RepoMeta>>(new Map());
-  const tooltipMetaRequestRef = useRef<Map<string, Promise<RepoMeta | null>>>(new Map());
+  const tooltipMetaIndexRequestRef = useRef<Promise<void> | null>(null);
   const activeTooltipRef = useRef<ActiveTooltip | null>(null);
 
   const metricOptions = availableMetrics.map((metricKey) => METRIC_OPTIONS[metricKey]);
@@ -170,6 +185,37 @@ export function Treemap({
   const hideTooltip = useCallback(() => {
     activeTooltipRef.current = null;
     tooltipRef.current?.hide();
+  }, []);
+  const ensureTooltipMetaIndex = useCallback(() => {
+    if (tooltipMetaCacheRef.current.size > 0) {
+      return Promise.resolve();
+    }
+
+    if (tooltipMetaIndexRequestRef.current) {
+      return tooltipMetaIndexRequestRef.current;
+    }
+
+    const request = fetch("/repo-meta.json")
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Failed to load repo meta index: ${response.status}`);
+        }
+
+        const payload = (await response.json()) as RepoMetaIndex;
+        for (const [fullName, value] of Object.entries(payload)) {
+          tooltipMetaCacheRef.current.set(fullName, {
+            createdAt: value[0] ?? undefined,
+            updatedAt: value[1] ?? undefined,
+          });
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        tooltipMetaIndexRequestRef.current = null;
+      });
+
+    tooltipMetaIndexRequestRef.current = request;
+    return request;
   }, []);
   const showRepoTooltip = useCallback(
     (x: number, y: number, repo: Repo, langName: string, langColor: string) => {
@@ -189,31 +235,13 @@ export function Treemap({
         metaLoading: !cachedMeta,
       });
 
-      if (cachedMeta || tooltipMetaRequestRef.current.has(repo.fullName)) {
+      if (cachedMeta) {
         return;
       }
 
-      const request = fetch(
-        `/api/repo-meta?fullName=${encodeURIComponent(repo.fullName)}`
-      )
-        .then(async (response) => {
-          if (!response.ok) return null;
-          const payload = (await response.json()) as RepoMeta;
-          return {
-            createdAt: payload.createdAt,
-            updatedAt: payload.updatedAt,
-          };
-        })
-        .catch(() => null)
-        .finally(() => {
-          tooltipMetaRequestRef.current.delete(repo.fullName);
-        });
-
-      tooltipMetaRequestRef.current.set(repo.fullName, request);
-
-      request.then((meta) => {
+      ensureTooltipMetaIndex().then(() => {
+        const meta = tooltipMetaCacheRef.current.get(repo.fullName);
         if (!meta) return;
-        tooltipMetaCacheRef.current.set(repo.fullName, meta);
 
         const activeTooltip = activeTooltipRef.current;
         if (!activeTooltip || activeTooltip.fullName !== repo.fullName) return;
@@ -227,7 +255,7 @@ export function Treemap({
         );
       });
     },
-    []
+    [ensureTooltipMetaIndex]
   );
 
   // ── Compute layout ──
@@ -238,13 +266,13 @@ export function Treemap({
     const dpr = devicePixelRatio || 1;
     const W = canvas.width / dpr;
     const H = canvas.height / dpr;
-    const query = search.toLowerCase();
+    const query = search.trim().toLowerCase();
 
     if (mode === "overview" && groups) {
       const searchedGroups = groups.map((g) => ({
         ...g,
         repos: query
-          ? g.repos.filter((r) => r.fullName.toLowerCase().includes(query))
+          ? g.repos.filter((r) => matchesRepoSearch(r, query, g.lang))
           : g.repos,
       }));
       const hasSearchMatches = searchedGroups.some((g) => g.repos.length > 0);
@@ -353,7 +381,7 @@ export function Treemap({
     } else if (mode === "detail" && detailGroup) {
       const searchedRepos = query
         ? detailGroup.repos.filter((r) =>
-            r.fullName.toLowerCase().includes(query)
+            matchesRepoSearch(r, query, detailGroup.lang)
           )
         : detailGroup.repos;
       const buildReposForMetric = (metricKey: Metric) =>

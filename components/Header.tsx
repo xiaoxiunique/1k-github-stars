@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import type { Metric } from "@/lib/types";
 
 export interface HeaderBreadcrumbItem {
@@ -25,6 +26,12 @@ const DEFAULT_METRICS: { key: Metric; label: string }[] = [
   { key: "forks", label: "Forks" },
 ];
 
+const GLOBAL_TABS = [
+  { href: "/", label: "Projects" },
+  { href: "/daily-trading", label: "Daily" },
+  { href: "/awesome", label: "Awesome" },
+];
+
 export function Header({
   breadcrumb,
   metric,
@@ -34,11 +41,36 @@ export function Header({
   info,
   metrics = DEFAULT_METRICS,
 }: HeaderProps) {
+  const pathname = usePathname();
+
   return (
     <header className="flex items-center gap-3 px-5 py-2.5 bg-[#151515] border-b border-[#252525] shrink-0 z-10">
       <h1 className="text-[15px] font-bold whitespace-nowrap">
         GitHub <span className="text-[#61dafb]">Treemap</span>
       </h1>
+
+      <div className="flex gap-1">
+        {GLOBAL_TABS.map((tab) => {
+          const active =
+            tab.href === "/"
+              ? pathname === "/"
+              : pathname === tab.href;
+
+          return (
+            <Link
+              key={tab.href}
+              href={tab.href}
+              className={`px-3 py-1 rounded text-xs border transition-all ${
+                active
+                  ? "bg-[#61dafb] text-black border-[#61dafb]"
+                  : "border-[#252525] text-neutral-500 hover:border-neutral-600 hover:text-neutral-300"
+              }`}
+            >
+              {tab.label}
+            </Link>
+          );
+        })}
+      </div>
 
       <nav className="flex items-center gap-1 text-sm text-neutral-500">
         {breadcrumb?.map((b, i) => (

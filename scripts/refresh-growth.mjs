@@ -14,6 +14,7 @@ import { resolve } from "node:path";
 const DATA_PATH = resolve(process.cwd(), "data/repos.json");
 const SNAPSHOT_DIR = resolve(process.cwd(), "data/snapshots");
 const PROGRESS_PATH = resolve(SNAPSHOT_DIR, "refresh-growth-progress.json");
+const META_INDEX_PATH = resolve(process.cwd(), "public/repo-meta.json");
 const GITHUB_GRAPHQL_URL = "https://api.github.com/graphql";
 const BATCH_SIZE = Number.parseInt(process.env.GH_BATCH_SIZE ?? "100", 10);
 const CONCURRENCY = Number.parseInt(process.env.GH_CONCURRENCY ?? "1", 10);
@@ -48,6 +49,17 @@ function saveSnapshotIfNeeded(rawJson, exportedAt) {
     writeFileSync(snapshotPath, rawJson);
   }
   return snapshotPath;
+}
+
+function buildRepoMetaIndex(rows) {
+  const index = {};
+
+  for (const row of rows) {
+    if (!row[6] && !row[7]) continue;
+    index[row[0]] = [row[6] ?? null, row[7] ?? null];
+  }
+
+  return index;
 }
 
 function chunk(array, size) {
@@ -338,6 +350,7 @@ async function main() {
   };
 
   writeJsonAtomically(DATA_PATH, nextData);
+  writeJsonAtomically(META_INDEX_PATH, buildRepoMetaIndex(nextRepos));
   rmSync(PROGRESS_PATH, { force: true });
 
   const topMovers = [...nextRepos]
