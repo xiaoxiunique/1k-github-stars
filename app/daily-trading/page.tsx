@@ -6,10 +6,25 @@ import {
   getDailyTrendingData,
   getExportedAt,
 } from "@/lib/data";
+import { SITE_NAME, SITE_URL } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: "Daily Trending",
   description: "A treemap view of repo momentum ranked by daily star growth, excluding very new or low-baseline projects.",
+  alternates: {
+    canonical: "/daily-trading",
+  },
+  openGraph: {
+    title: `Daily Trending · ${SITE_NAME}`,
+    description:
+      "A treemap view of repo momentum ranked by daily star growth, excluding very new or low-baseline projects.",
+    url: `${SITE_URL}/daily-trading`,
+  },
+  twitter: {
+    title: `Daily Trending · ${SITE_NAME}`,
+    description:
+      "A treemap view of repo momentum ranked by daily star growth, excluding very new or low-baseline projects.",
+  },
 };
 
 function formatExportedAt(value: string) {

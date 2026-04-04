@@ -1,10 +1,25 @@
 import type { Metadata } from "next";
 import { Treemap } from "@/components/Treemap";
 import { getCuratedGroups, getCuratedTotal, getExportedAt } from "@/lib/data";
+import { SITE_NAME, SITE_URL } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: "Awesome & Guides",
   description: "A treemap view dedicated to awesome lists, guides, tutorials, interviews, and other curated repositories.",
+  alternates: {
+    canonical: "/awesome",
+  },
+  openGraph: {
+    title: `Awesome & Guides · ${SITE_NAME}`,
+    description:
+      "A treemap view dedicated to awesome lists, guides, tutorials, interviews, and other curated repositories.",
+    url: `${SITE_URL}/awesome`,
+  },
+  twitter: {
+    title: `Awesome & Guides · ${SITE_NAME}`,
+    description:
+      "A treemap view dedicated to awesome lists, guides, tutorials, interviews, and other curated repositories.",
+  },
 };
 
 function formatExportedAt(value: string) {
