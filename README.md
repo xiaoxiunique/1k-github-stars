@@ -4,6 +4,12 @@ Interactive treemap of 60k+ GitHub repositories with daily momentum, curated dis
 
 Live site: [https://ustars.dev](https://ustars.dev)
 
+## Overview
+
+![Homepage overview](./public/readme/ustars-home.png)
+
+## Search example
+
 ![Search results for "skills"](./public/readme/skills-search.png)
 
 ## What it does
