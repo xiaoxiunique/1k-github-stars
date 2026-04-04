@@ -32,6 +32,8 @@ const GLOBAL_TABS = [
   { href: "/awesome", label: "Awesome" },
 ];
 
+const SOURCE_REPO_URL = "https://github.com/xiaoxiunique/1k-github-stars";
+
 export function Header({
   breadcrumb,
   metric,
@@ -71,6 +73,15 @@ export function Header({
           );
         })}
       </div>
+
+      <a
+        href={SOURCE_REPO_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="px-3 py-1 rounded text-xs border border-[#252525] text-neutral-500 hover:border-neutral-600 hover:text-neutral-300 transition-all"
+      >
+        GitHub
+      </a>
 
       <nav className="flex items-center gap-1 text-sm text-neutral-500">
         {breadcrumb?.map((b, i) => (

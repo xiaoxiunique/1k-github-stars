@@ -173,6 +173,7 @@ export function Treemap({
   const tooltipMetaCacheRef = useRef<Map<string, RepoMeta>>(new Map());
   const tooltipMetaIndexRequestRef = useRef<Promise<void> | null>(null);
   const activeTooltipRef = useRef<ActiveTooltip | null>(null);
+  const searchReadyRef = useRef(false);
 
   const metricOptions = availableMetrics.map((metricKey) => METRIC_OPTIONS[metricKey]);
 
@@ -257,6 +258,44 @@ export function Treemap({
     },
     [ensureTooltipMetaIndex]
   );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const syncSearchFromUrl = () => {
+      const url = new URL(window.location.href);
+      const query = url.searchParams.get("q") ?? "";
+      setSearch(query);
+      searchReadyRef.current = true;
+    };
+
+    syncSearchFromUrl();
+    window.addEventListener("popstate", syncSearchFromUrl);
+
+    return () => {
+      window.removeEventListener("popstate", syncSearchFromUrl);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !searchReadyRef.current) return;
+
+    const url = new URL(window.location.href);
+    const query = search.trim();
+
+    if (query) {
+      url.searchParams.set("q", query);
+    } else {
+      url.searchParams.delete("q");
+    }
+
+    const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+
+    if (nextUrl !== currentUrl) {
+      window.history.replaceState(window.history.state, "", nextUrl);
+    }
+  }, [search]);
 
   // ── Compute layout ──
   const computeLayout = useCallback(() => {
