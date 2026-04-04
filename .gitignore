@@ -45,3 +45,4 @@ next-env.d.ts
 .gstack/
 .omx/
 .wrangler/
+.playwright-cli/

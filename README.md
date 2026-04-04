@@ -1,18 +1,19 @@
 # 1k GitHub Stars
 
-Interactive treemap of 60k+ GitHub repositories — 每日趋势、Awesome/Guide 内容聚合、按语言深度探索。
+Interactive treemap of 60k+ GitHub repositories with daily momentum, curated discovery, and language-level exploration.
 
 Live site: [https://ustars.dev](https://ustars.dev)
 
-![1k GitHub Stars screenshot](./public/readme/ustars-home.png)
+![Search results for "skills"](./public/readme/skills-search.png)
 
 ## What it does
 
-- **Projects tab**: default repo map, with curated/guide-style repositories filtered out
+- **Projects tab**: default repo map, with curated and guide-style repositories filtered out
 - **Daily tab**: highlights momentum using star-growth deltas from the latest snapshot
 - **Awesome tab**: brings back the filtered awesome / guide / tutorial / interview style repositories as a dedicated view
 - **Language drill-down**: click any language block to zoom into that language only
 - **Hover metadata**: repo created/updated dates are loaded from a static index instead of per-hover API calls
+- **Search**: matches repository name, description, and language labels across the active view
 
 ## Data model
 
