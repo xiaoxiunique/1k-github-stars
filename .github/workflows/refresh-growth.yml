@@ -1,0 +1,55 @@
+name: Refresh GitHub growth data
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-growth
+  cancel-in-progress: false
+
+jobs:
+  refresh-growth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Refresh snapshot data
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN != '' && secrets.GH_TOKEN || github.token }}
+          GH_BATCH_SIZE: "100"
+          GH_CONCURRENCY: "1"
+          GH_REQUEST_SPACING_MS: "300"
+          GH_MAX_RETRIES: "4"
+        run: npm run refresh:growth
+
+      - name: Commit updated dataset
+        run: |
+          if git diff --quiet -- data/repos.json public/repo-meta.json data/snapshots; then
+            echo "No dataset changes detected."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/repos.json public/repo-meta.json data/snapshots
+          git commit -m "chore: refresh growth dataset"
+          git push
