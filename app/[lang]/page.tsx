@@ -1,10 +1,10 @@
-import { getGroups, getTotal } from "@/lib/data";
+import { getGroups, getLangSlug, getTotal } from "@/lib/data";
 import { Treemap } from "@/components/Treemap";
 import { notFound } from "next/navigation";
 
 export function generateStaticParams() {
   const groups = getGroups();
-  return groups.map((g) => ({ lang: g.lang.toLowerCase() }));
+  return groups.map((g) => ({ lang: getLangSlug(g.lang) }));
 }
 
 export default async function LangPage({
@@ -16,7 +16,7 @@ export default async function LangPage({
   const groups = getGroups();
   const total = getTotal();
   const group = groups.find(
-    (g) => g.lang.toLowerCase() === decodeURIComponent(lang).toLowerCase()
+    (g) => getLangSlug(g.lang) === decodeURIComponent(lang).toLowerCase()
   );
 
   if (!group) notFound();

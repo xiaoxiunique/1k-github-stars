@@ -1,4 +1,4 @@
-import { getGroups, getTotal } from "@/lib/data";
+import { getGroups, getLangSlug, getTotal } from "@/lib/data";
 import { Treemap } from "@/components/Treemap";
 import { parseTierSlug, filterReposByTier, generateSubTiers, TOP_TIERS } from "@/lib/tiers";
 import { notFound } from "next/navigation";
@@ -11,13 +11,13 @@ export function generateStaticParams() {
     for (const t of TOP_TIERS) {
       const repos = filterReposByTier(g.repos, t.min, t.max);
       if (repos.length > 36) {
-        params.push({ lang: g.lang.toLowerCase(), tier: t.slug });
+        params.push({ lang: getLangSlug(g.lang), tier: t.slug });
         // Also generate sub-tiers one level deep
         const subTiers = generateSubTiers(t.min, t.max === Infinity ? Math.max(...repos.map(r => r.stars)) + 1 : t.max);
         for (const st of subTiers) {
           const subRepos = filterReposByTier(g.repos, st.min, st.max);
           if (subRepos.length > 36) {
-            params.push({ lang: g.lang.toLowerCase(), tier: st.slug });
+            params.push({ lang: getLangSlug(g.lang), tier: st.slug });
           }
         }
       }
@@ -36,7 +36,7 @@ export default async function TierPage({
   const groups = getGroups();
   const total = getTotal();
   const group = groups.find(
-    (g) => g.lang.toLowerCase() === decodeURIComponent(lang).toLowerCase()
+    (g) => getLangSlug(g.lang) === decodeURIComponent(lang).toLowerCase()
   );
 
   if (!group) notFound();

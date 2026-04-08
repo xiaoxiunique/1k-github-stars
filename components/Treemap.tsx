@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { squarify } from "@/lib/squarify";
 import { lighten, darken, contrastText, fmtK } from "@/lib/colors";
 import { getRepoValue } from "@/lib/metrics";
+import { getLangSlug } from "@/lib/data";
 import { Header, type HeaderBreadcrumbItem } from "./Header";
 import { Panel, type PanelHandle } from "./Panel";
 import { Tooltip, type TooltipHandle } from "./Tooltip";
@@ -989,7 +990,7 @@ export function Treemap({
             const maxVal = Math.max(...g.allRepos.map(r => r.stars));
             const minVal = Math.min(...g.allRepos.map(r => r.stars));
             const slug = `${minVal}-${maxVal + 1}`;
-            router.push(`/${encodeURIComponent(detailGroup!.lang.toLowerCase())}/${slug}`);
+            router.push(`/${encodeURIComponent(getLangSlug(detailGroup!.lang))}/${slug}`);
           }
           return;
         }
@@ -1011,14 +1012,14 @@ export function Treemap({
             const maxVal = Math.max(...gi.allRepos.map(r => r.stars));
             const minVal = Math.min(...gi.allRepos.map(r => r.stars));
             const slug = `${minVal}-${maxVal + 1}`;
-            router.push(`/${encodeURIComponent(detailGroup!.lang.toLowerCase())}/${slug}`);
+            router.push(`/${encodeURIComponent(getLangSlug(detailGroup!.lang))}/${slug}`);
           }
         }
       } else {
         const hdrHit = hitHeader(mx, my);
         if (hdrHit >= 0) {
           const g = groupRectsRef.current[hdrHit];
-          router.push(`/${encodeURIComponent(g.lang.toLowerCase())}`);
+          router.push(`/${encodeURIComponent(getLangSlug(g.lang))}`);
           return;
         }
         const repoHit = hitRepo(mx, my);
@@ -1032,7 +1033,7 @@ export function Treemap({
         const gh = hitGroup(mx, my);
         if (gh >= 0) {
           const g = groupRectsRef.current[gh];
-          router.push(`/${encodeURIComponent(g.lang.toLowerCase())}`);
+          router.push(`/${encodeURIComponent(getLangSlug(g.lang))}`);
         }
       }
     },
@@ -1046,7 +1047,7 @@ export function Treemap({
       : tierLabel
         ? [
             { label: "All Languages", href: "/" },
-            { label: detailGroup!.lang, href: `/${encodeURIComponent(detailGroup!.lang.toLowerCase())}`, color: detailGroup!.color },
+            { label: detailGroup!.lang, href: `/${encodeURIComponent(getLangSlug(detailGroup!.lang))}`, color: detailGroup!.color },
             { label: tierLabel },
           ]
         : [

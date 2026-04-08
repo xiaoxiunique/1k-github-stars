@@ -25,6 +25,19 @@ function mapRowsToRepos(rows: RepoData["repos"]): Repo[] {
   }));
 }
 
+function normalizeLangSlug(value: string) {
+  return value
+    .toLowerCase()
+    .replaceAll("c++", "c-plus-plus")
+    .replaceAll("c#", "c-sharp")
+    .replaceAll("f#", "f-sharp")
+    .replaceAll("objective-c++", "objective-c-plus-plus")
+    .replaceAll("+", "-plus-")
+    .replaceAll("#", "-sharp")
+    .replaceAll(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 export function getAllRepos(): Repo[] {
   return mapRowsToRepos(filteredRows);
 }
@@ -130,10 +143,15 @@ export function getDailyTrendingData() {
 
 export function getGroupByLang(lang: string): GroupData | null {
   const groups = getGroups();
-  return groups.find((g) => g.lang.toLowerCase() === lang.toLowerCase()) ?? null;
+  const normalized = normalizeLangSlug(lang);
+  return groups.find((g) => getLangSlug(g.lang) === normalized) ?? null;
 }
 
 export function getAllLangSlugs(): string[] {
   const groups = getGroups();
-  return groups.map((g) => g.lang.toLowerCase());
+  return groups.map((g) => getLangSlug(g.lang));
+}
+
+export function getLangSlug(lang: string): string {
+  return normalizeLangSlug(lang);
 }
