@@ -1,35 +1,48 @@
 # 1k GitHub Stars
 
+![Next.js](https://img.shields.io/badge/next.js-16-black)
+![TypeScript](https://img.shields.io/badge/typescript-5-blue)
+![License](https://img.shields.io/github/license/xiaoxiunique/1k-github-stars)
+
 Interactive treemap of 60k+ GitHub repositories with daily momentum, curated discovery, and language-level exploration.
 
-Live site: [https://ustars.dev](https://ustars.dev)
+**Live site:** [ustars.dev](https://ustars.dev)
 
-## Overview
+## Table of Contents
+- [Highlights](#highlights)
+- [Screenshots](#screenshots)
+- [How It Works](#how-it-works)
+- [Data Files](#data-files)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Deployment](#deployment)
+- [Repository Structure](#repository-structure)
+- [Notes](#notes)
 
+## Highlights
+- **Projects tab** for the default treemap view
+- **Daily tab** for star-growth momentum
+- **Awesome tab** for curated and guide-style repositories
+- **Language drill-down** for focused exploration by ecosystem
+- **Search** across repository name, description, and language labels
+- **Static hover metadata** to avoid per-hover API requests
+
+## Screenshots
+### Homepage overview
 ![Homepage overview](./public/readme/ustars-home.png)
 
-## Search example
-
+### Search example
 ![Search results for "skills"](./public/readme/skills-search.png)
 
-## What it does
+## How It Works
+The app renders a static Next.js site backed by repository snapshot data. It separates the main visualization dataset from hover metadata so the UI stays responsive without runtime server calls.
 
-- **Projects tab**: default repo map, with curated and guide-style repositories filtered out
-- **Daily tab**: highlights momentum using star-growth deltas from the latest snapshot
-- **Awesome tab**: brings back the filtered awesome / guide / tutorial / interview style repositories as a dedicated view
-- **Language drill-down**: click any language block to zoom into that language only
-- **Hover metadata**: repo created/updated dates are loaded from a static index instead of per-hover API calls
-- **Search**: matches repository name, description, and language labels across the active view
+## Data Files
+- `data/repos.json`, main repository dataset
+- `public/repo-meta.json`, lightweight hover metadata index
+- `data/snapshots/`, previous snapshots used for growth calculations
 
-## Data model
-
-The app is driven by a single snapshot file:
-
-- `data/repos.json` — main repo dataset
-- `public/repo-meta.json` — lightweight hover metadata index
-
-Each repo row currently stores:
-
+Each repository row currently stores:
 1. `fullName`
 2. `stars`
 3. `forks`
@@ -39,62 +52,50 @@ Each repo row currently stores:
 7. `createdAt`
 8. `updatedAt`
 
-## Refreshing GitHub data
+## Installation
+```bash
+git clone https://github.com/xiaoxiunique/1k-github-stars.git
+cd 1k-github-stars
+npm install
+```
 
-Use the refresh script:
+## Usage
+### Start local development
+```bash
+npm run dev
+```
 
+Then open `http://localhost:3000`.
+
+### Refresh GitHub data
 ```bash
 npm run refresh:growth
 ```
 
-What it does:
+This script refreshes repository stats, computes growth against the previous snapshot, writes resumable progress, archives the previous dataset, and regenerates `public/repo-meta.json`.
 
-- refreshes stars / forks / timestamps from GitHub
-- computes `growth` against the previous local snapshot
-- writes a resumable progress file during long runs
-- snapshots the previous dataset into `data/snapshots/`
-- regenerates `public/repo-meta.json`
-
-## Local development
-
-```bash
-npm install
-npm run dev
-```
-
-Open:
-
-- `http://localhost:3000`
-
-## Build
-
+### Build the static site
 ```bash
 npm run build
 ```
 
-This project is configured as a **static export**.
-
-## Cloudflare Pages deployment
-
-The current deployment path is Cloudflare Pages:
-
+## Deployment
+### Cloudflare Pages
 ```bash
 npm run build
 npx wrangler pages deploy out --project-name github-treemap --branch main
 ```
 
-## Repository structure
-
-```txt
+## Repository Structure
+```text
 app/                  Next.js App Router pages
 components/           treemap canvas, header, tooltip, panel
-data/                 repo snapshot data
+data/                 repository snapshot data
 lib/                  grouping, filtering, classifier, metrics
-public/repo-meta.json static hover metadata index
+public/repo-meta.json hover metadata index
 scripts/              data refresh scripts
 ```
 
 ## Notes
-
-- The project intentionally separates the main treemap data from hover metadata to reduce runtime latency and avoid per-hover server/API requests.
-- Curated repositories are filtered at the data layer, not only in the UI, so homepage / language pages / daily view stay consistent.
+- Curated repositories are filtered at the data layer, not only in the UI.
+- The project is configured as a static export.
