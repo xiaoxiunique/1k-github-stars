@@ -2,7 +2,7 @@
 
 Interactive treemap of 60k+ GitHub repositories with daily momentum, curated discovery, and language-level exploration.
 
-Live site: [https://ustars.dev](https://ustars.dev)
+Live site: [https://github-treemap.pages.dev](https://github-treemap.pages.dev)
 
 ## Overview
 

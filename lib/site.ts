@@ -1,5 +1,5 @@
 export const SITE_NAME = "1k GitHub Stars";
-export const SITE_URL = "https://ustars.dev";
+export const SITE_URL = "https://github-treemap.pages.dev";
 export const SITE_DESCRIPTION =
   "Interactive treemap of 60k+ GitHub repositories with daily momentum, curated discovery, and language-level exploration.";
 
